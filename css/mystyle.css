@@ -1,7 +1,8 @@
-link 
+a:link
 {
  color: blue;
-
+ display: block;
+ text-align: center;
 }
 p
 {
