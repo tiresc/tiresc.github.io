@@ -6,14 +6,23 @@
 	<title>Tic-Tac-Toe</title>
 	</head>
 	<body id="body">
-		<div align="right"><input type="button" onclick="document.getElementById('body').style.backgroundColor = 'white';document.getElementById('body').style.color = 'black'"  id="dayMode" value="Day Mode">
-                               <input type="button" onclick="document.getElementById('body').style.backgroundColor = 'black';document.getElementById('body').style.color = 'white'"  id="nightMode" value="Night Mode"></div>
+		<div align="right">
+		<input type="button" onclick="document.getElementById('body').style.backgroundColor = 'white';document.getElementById('body').style.color = 'black'"  id="dayMode" value="Day Mode">
+               <input type="button" onclick="document.getElementById('body').style.backgroundColor = 'black';document.getElementById('body').style.color = 'white'"  id="nightMode" value="Night Mode">
+		<h6 id="demo"></h6>
+	       </div>
 	<h2><center>TIC----TAC----TOE</center></h2>
-	<form>
-		<p id="playerTurn"><center>Player One's Turn: <input type="text" name="playerInput"><br></center></p>
-	</form>
-	<h4 id="test"><center></center></h4>
+	<form id="frm1" action="/action_page.php">
+    <p id="playerInput">First player:</p> <input type="text" name="fPlayer" value="">
+    <p id="playerInput">Second player:</p> <input type="text" name="sPLayer" value="">
+</form>
+
+<button onclick="myFunction()" id="submit">Submit</button>
+
+
+	<p id="win"></p>
+	<h4 id="test"></h4>
 	<h3 id="board"><center></center></h3>
-	<script src="ticScript.js"></script>
+	<script src="myScript.js"></script>
 	<body>
 </html>
