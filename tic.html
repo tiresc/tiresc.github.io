@@ -7,22 +7,27 @@
 	</head>
 	<body id="body">
 		<div align="right">
-		<input type="button" onclick="document.getElementById('body').style.backgroundColor = 'white';document.getElementById('body').style.color = 'black'"  id="dayMode" value="Day Mode">
-               <input type="button" onclick="document.getElementById('body').style.backgroundColor = 'black';document.getElementById('body').style.color = 'white'"  id="nightMode" value="Night Mode">
+		<button onclick="dayMode()" id="dMode">Day Mode</button>
+                <button onclick="nightMode()" id="nMode">Night Mode</button>
+
 		<h6 id="demo"></h6>
-	       </div>
-	<h2><center>TIC----TAC----TOE</center></h2>
+	
 	<form id="frm1" action="/action_page.php">
     <p id="playerInput">First player:</p> <input type="text" name="fPlayer" value="">
     <p id="playerInput">Second player:</p> <input type="text" name="sPLayer" value="">
 </form>
-
 <button onclick="myFunction()" id="submit">Submit</button>
+<form id="playerTurn" action="/action_page.php">
+    <p id="Turn"></p><input type="text" name="playersTurn" value="">
+</form><br>
+<button onclick="play()" "playerSubmit">Submit</button></div>
+	<h2><center>TIC----TAC----TOE</center></h2>
+
 
 
 	<p id="win"></p>
 	<h4 id="test"></h4>
 	<h3 id="board"><center></center></h3>
-	<script src="ticScript.js"></script>
+	<script src="myScript.js"></script>
 	<body>
 </html>
