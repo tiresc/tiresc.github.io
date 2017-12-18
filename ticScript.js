@@ -99,4 +99,4 @@ function main(){
 	//board(p1, p2);
 }
 
-main();
+main()
