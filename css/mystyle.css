@@ -1,9 +1,11 @@
 a:link {
         color: blue;
         display: block;
-        text-align: center;
+        text-align: left;
 }
-
+h1 {
+	text-align: center;
+}
 p {
     font-family: times new roman;
     color: black;
@@ -12,3 +14,6 @@ p {
  
 }
 
+body {
+	background-color: lightgrey;
+}
