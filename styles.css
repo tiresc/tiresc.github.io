@@ -1,27 +1,28 @@
+/* Add your CSS styles here */
 body {
-    background-color:#6b5b95;
-    /*#c5ac68*/
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
 }
 
- 
-img {
-    display:block;
-    margin-top: 5%;
-    margin-bottom: 5%;
-    margin-left:auto;
-    margin-right:auto;
+header {
+    background-color: #f0f0f0;
+    padding: 20px;
+    text-align: center;
+}
 
+a, a:visited {
+    color: black; /* or any color you prefer for your links */
+    text-decoration: none; /* optional, removes underline */
 }
-h4{
+
+main {
+    padding: 15px;
+}
+
+footer {
+    background-color: #333;
+    color: white;
     text-align: center;
-}
-a:hover{
-    color: black;
-}
-p{
-    text-align: center;
-}
-a{
-    font-family: "Lucida Console";
-    text-align: center;
+    padding: 10px;
 }
