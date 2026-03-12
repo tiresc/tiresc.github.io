@@ -3202,7 +3202,7 @@ function setPerspectiveExercise(shapeMode = state.perspective.selectedShape) {
   transitionPerspectiveExercise(next, 560);
 }
 
-function stepPerspectiveRotation(direction) {
+function stepPerspectiveRotation(direction, axis = "horizontal") {
   const current = getAnimationSnapshot() || state.perspective.current;
 
   if (!current) {
@@ -3211,12 +3211,15 @@ function stepPerspectiveRotation(direction) {
   }
 
   const next = cloneExercise(current);
-  const step = state.perspective.selectedMode === "one" ? 0.18 : 0.22;
+  const horizontalStep = state.perspective.selectedMode === "one" ? 0.18 : 0.22;
+  const verticalStep = state.perspective.selectedMode === "three" ? 0.18 : 0.16;
 
-  if (state.perspective.selectedMode === "one") {
-    next.rotation.z += direction * step;
+  if (axis === "vertical") {
+    next.rotation.x = clamp(next.rotation.x + direction * verticalStep, -1.2, 1.2);
+  } else if (state.perspective.selectedMode === "one") {
+    next.rotation.z += direction * horizontalStep;
   } else {
-    next.rotation.y += direction * step;
+    next.rotation.y += direction * horizontalStep;
   }
 
   transitionPerspectiveExercise(next, 320);
@@ -3277,13 +3280,13 @@ function handlePerspectivePointerMove(event) {
 
   if (state.perspective.selectedMode === "one") {
     current.rotation = {
-      x: 0,
+      x: clamp(interaction.startRotation.x - dy * 0.008, -1.2, 1.2),
       y: 0,
       z: clamp(interaction.startRotation.z + dx * 0.008, -1.2, 1.2),
     };
   } else if (state.perspective.selectedMode === "two") {
     current.rotation = {
-      x: 0,
+      x: clamp(interaction.startRotation.x - dy * 0.008, -1.2, 1.2),
       y: interaction.startRotation.y + dx * 0.008,
       z: 0,
     };
@@ -4401,7 +4404,13 @@ function handlePerspectiveClick(event) {
 
   if (rotateButton) {
     switchMode("perspective");
-    stepPerspectiveRotation(rotateButton.dataset.rotate === "left" ? -1 : 1);
+    if (rotateButton.dataset.rotate === "up") {
+      stepPerspectiveRotation(1, "vertical");
+    } else if (rotateButton.dataset.rotate === "down") {
+      stepPerspectiveRotation(-1, "vertical");
+    } else {
+      stepPerspectiveRotation(rotateButton.dataset.rotate === "left" ? -1 : 1);
+    }
     return;
   }
 
@@ -4579,14 +4588,32 @@ function handleKeyboard(event) {
     state.mode = "perspective";
     syncUi();
     setPerspectiveExercise(state.perspective.selectedShape);
+  } else if (key === "arrowleft") {
+    event.preventDefault();
+    switchMode("perspective");
+    stepPerspectiveRotation(-1);
+  } else if (key === "arrowright") {
+    event.preventDefault();
+    switchMode("perspective");
+    stepPerspectiveRotation(1);
   } else if (key === "arrowup") {
     event.preventDefault();
-    switchMode("perspective");
-    stepPerspectiveLift(1);
+    if (event.shiftKey) {
+      switchMode("perspective");
+      stepPerspectiveLift(1);
+    } else {
+      switchMode("perspective");
+      stepPerspectiveRotation(1, "vertical");
+    }
   } else if (key === "arrowdown") {
     event.preventDefault();
-    switchMode("perspective");
-    stepPerspectiveLift(-1);
+    if (event.shiftKey) {
+      switchMode("perspective");
+      stepPerspectiveLift(-1);
+    } else {
+      switchMode("perspective");
+      stepPerspectiveRotation(-1, "vertical");
+    }
   } else if (key === "r") {
     if (state.mode === "gesture") {
       return;
