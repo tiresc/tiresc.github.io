@@ -1,48 +1,241 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Web Page</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cuby</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="info-panel">
+        <p class="eyebrow">Drawing Drill</p>
+        <h1>Cuby</h1>
+        <p class="lede">
+          Perspective drills for cubes, boxes, and cylinders, plus timed gesture sessions with
+          internet reference images.
+        </p>
 
-    <header>
-        <h1>Welcome to My Web Page</h1>
-    </header>
+        <div class="mode-switch" aria-label="Mode switch">
+          <button type="button" class="button button-primary" data-mode="perspective" aria-pressed="true">
+            Perspective
+          </button>
+          <button type="button" class="button" data-mode="gesture" aria-pressed="false">
+            Gesture Time
+          </button>
+        </div>
 
-    <nav>
-        <!-- Navigation links can go here -->
-        <a href="index.html">home</a>
-        <a href="ideas.html">ideas</a>
-    </nav>
+        <section class="tool-panel" data-panel="perspective">
+          <div class="control-group">
+            <p class="group-label">Form</p>
+            <div class="controls">
+              <button type="button" class="button button-primary" data-shape="random" aria-pressed="true">
+                Shuffle
+              </button>
+              <button type="button" class="button" data-shape="cube" aria-pressed="false">Cube</button>
+              <button type="button" class="button" data-shape="box" aria-pressed="false">Box</button>
+              <button type="button" class="button" data-shape="cylinder" aria-pressed="false">
+                Cylinder
+              </button>
+            </div>
+          </div>
 
-    <main>
-        <section>
-            <h2>Section Title</h2>
-            <p>This is a paragraph in the section.</p>
+          <div class="control-group">
+            <p class="group-label">Perspective</p>
+            <div class="controls">
+              <button type="button" class="button" data-perspective-mode="one" aria-pressed="false">
+                1-Point
+              </button>
+              <button type="button" class="button" data-perspective-mode="two" aria-pressed="false">
+                2-Point
+              </button>
+              <button type="button" class="button" data-perspective-mode="three" aria-pressed="true">
+                3-Point
+              </button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <p class="group-label">Overlay</p>
+            <div class="controls">
+              <button type="button" class="button" data-toggle="hidden" aria-pressed="true">
+                Hidden Lines On
+              </button>
+              <button type="button" class="button" data-toggle="guides" aria-pressed="false">
+                Guides Off
+              </button>
+              <button type="button" class="button" data-toggle="zoom" aria-pressed="false">
+                Zoom Out
+              </button>
+              <button type="button" class="button" data-toggle="auto" aria-pressed="false">
+                Auto Shuffle
+              </button>
+            </div>
+          </div>
+
+          <div class="legend" aria-label="Line legend">
+            <div class="legend-row">
+              <span class="swatch swatch-front" aria-hidden="true"></span>
+              <span>Visible line</span>
+            </div>
+            <div class="legend-row">
+              <span class="swatch swatch-hidden" aria-hidden="true"></span>
+              <span>Draw-through line</span>
+            </div>
+            <div class="legend-row">
+              <span class="swatch swatch-guide" aria-hidden="true"></span>
+              <span>Vanishing guide</span>
+            </div>
+          </div>
+
+          <dl class="stats">
+            <div class="stat">
+              <dt>Type</dt>
+              <dd data-kind>Cube</dd>
+            </div>
+            <div class="stat">
+              <dt>Size</dt>
+              <dd data-size>220 × 220 × 220</dd>
+            </div>
+            <div class="stat">
+              <dt>View</dt>
+              <dd data-view>Three-point tilt</dd>
+            </div>
+          </dl>
+
+          <p class="shortcuts">
+            Perspective shortcuts: <kbd>Space</kbd> shuffle, <kbd>C</kbd> cube, <kbd>B</kbd> box,
+            <kbd>L</kbd> cylinder, <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> perspective,
+            <kbd>H</kbd> hidden lines, <kbd>G</kbd> guides, <kbd>Z</kbd> zoom, <kbd>A</kbd> auto.
+          </p>
         </section>
 
-                <h4>Readings:</h4>
-        <a href="https://maxhodak.com/writings/">Max Hodak (Neuralink)</a>
-        <br>
-        <a href="https://vitalik.ca/">Vitalik Buterin (Ethereum)</a>
+        <section class="tool-panel" data-panel="gesture" hidden>
+          <div class="control-group">
+            <p class="group-label">Time Limit</p>
+            <div class="controls">
+              <button type="button" class="button" data-duration="30000" aria-pressed="false">30s</button>
+              <button type="button" class="button button-primary" data-duration="120000" aria-pressed="true">
+                2 min
+              </button>
+              <button type="button" class="button" data-duration="300000" aria-pressed="false">
+                5 min
+              </button>
+              <button type="button" class="button" data-duration="1200000" aria-pressed="false">
+                20 min
+              </button>
+              <button type="button" class="button" data-duration="3600000" aria-pressed="false">
+                1 hour
+              </button>
+            </div>
+          </div>
 
-        <h4>Free Books:</h4>
-        <a href="https://mogami.neocities.org/files/prime_intellect.pdf">The Metamorphosis of Prime Intellect</a>
-        <!--http://fennetic.net/irc/Greg%20Egan%20-%20Permutation%20City.pdf-->
+          <div class="control-group">
+            <p class="group-label">Reference Count</p>
+            <div class="controls">
+              <button type="button" class="button" data-ref-count="5" aria-pressed="false">5</button>
+              <button type="button" class="button button-primary" data-ref-count="10" aria-pressed="true">
+                10
+              </button>
+              <button type="button" class="button" data-ref-count="20" aria-pressed="false">20</button>
+              <button type="button" class="button" data-ref-count="0" aria-pressed="false">
+                Unlimited
+              </button>
+            </div>
+          </div>
 
-        <h4>Podcasts:</h4>
-        <a href="https://lexfridman.com/podcast/">Lex Fridman Podcast</a>
-        <h4>Other</h4>
-        <p><a href="VanNeistatBooks.html" target="_self">Van Neistat Books</a></p>
+          <div class="control-group">
+            <p class="group-label">Session</p>
+            <div class="controls">
+              <button type="button" class="button button-primary" data-gesture-action="start">
+                Start Session
+              </button>
+              <button type="button" class="button" data-gesture-action="next">Next Pose</button>
+              <button type="button" class="button" data-gesture-action="end">End Session</button>
+            </div>
+          </div>
+
+          <dl class="stats">
+            <div class="stat">
+              <dt>Timer</dt>
+              <dd data-gesture-time>2:00</dd>
+            </div>
+            <div class="stat">
+              <dt>Refs</dt>
+              <dd data-gesture-progress>0 / 10</dd>
+            </div>
+            <div class="stat">
+              <dt>Source</dt>
+              <dd data-gesture-source-name>Internet</dd>
+            </div>
+          </dl>
+
+          <p class="shortcuts">
+            Gesture shortcuts: <kbd>N</kbd> next pose, <kbd>E</kbd> end session, <kbd>S</kbd> start
+            or restart. Changing the time limit mid-session starts a new pose immediately.
+          </p>
+        </section>
+      </section>
+
+      <section class="stage-panel">
+        <div class="stage-header">
+          <div>
+            <p class="stage-label" data-stage-label>Perspective Drill</p>
+            <p class="stage-title" data-stage-title>Draw through the full form</p>
+          </div>
+          <div class="status-pill" data-status>Hidden lines visible</div>
+        </div>
+
+        <div class="canvas-frame" data-stage="perspective">
+          <canvas data-canvas aria-label="Random 3D form exercise"></canvas>
+        </div>
+
+        <section class="gesture-stage" data-stage="gesture" hidden>
+          <div class="gesture-shell">
+            <div class="gesture-view">
+              <div class="gesture-hud">
+                <div class="hud-pill" data-gesture-timer-pill>2:00</div>
+                <div class="hud-pill" data-gesture-counter-pill>0 / 10</div>
+              </div>
+
+              <div class="gesture-image-frame">
+                <p class="gesture-placeholder" data-gesture-placeholder>
+                  Select a time limit, choose how many references you want, and start a session.
+                </p>
+                <img data-gesture-image alt="Gesture reference pose" hidden />
+              </div>
+            </div>
+
+            <aside class="gesture-sidebar">
+              <div class="control-group">
+                <p class="group-label">Current Reference</p>
+                <p class="gesture-source-title" data-gesture-source-title>No pose loaded yet</p>
+                <a
+                  class="gesture-source-link"
+                  data-gesture-source-link
+                  href="#"
+                  target="_blank"
+                  rel="noreferrer"
+                  hidden
+                >
+                  Open source image
+                </a>
+                <p class="gesture-note" data-gesture-note>
+                  Gesture references are pulled from Wikimedia Commons so the app works without
+                  API keys or local setup.
+                </p>
+              </div>
+
+              <div class="gesture-summary" data-gesture-summary hidden>
+                <p class="group-label">References Used</p>
+                <div class="gesture-gallery" data-gesture-gallery></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </section>
     </main>
 
-    <footer>
-        <p>&copy; 2024 My Web Site</p>
-    </footer>
-
-    <script src="script.js"></script>
-</body>
+    <script defer src="./app.js"></script>
+  </body>
 </html>
