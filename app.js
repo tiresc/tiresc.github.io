@@ -297,6 +297,7 @@ const state = {
     current: null,
     animation: null,
     interaction: null,
+    spin: null,
     autoShuffle: false,
     autoTimer: 0,
     showHidden: true,
@@ -385,6 +386,19 @@ function lerpAngle(a, b, t) {
   }
 
   return a + delta * t;
+}
+
+function wrapAngle(angle) {
+  const tau = Math.PI * 2;
+  let next = angle % tau;
+
+  if (next <= -Math.PI) {
+    next += tau;
+  } else if (next > Math.PI) {
+    next -= tau;
+  }
+
+  return next;
 }
 
 function add2(a, b) {
@@ -986,6 +1000,41 @@ function getProjectionSettings() {
 
 function getAnimationFrame(now) {
   const perspectiveState = state.perspective;
+
+  if (!perspectiveState.animation && perspectiveState.spin && perspectiveState.current) {
+    const elapsedMs = Math.max(0, now - perspectiveState.spin.lastTime);
+
+    if (elapsedMs > 0) {
+      const elapsedSeconds = elapsedMs / 1000;
+      perspectiveState.current.rotation.x = wrapAngle(
+        perspectiveState.current.rotation.x + perspectiveState.spin.velocity.x * elapsedSeconds,
+      );
+      perspectiveState.current.rotation.y = wrapAngle(
+        perspectiveState.current.rotation.y + perspectiveState.spin.velocity.y * elapsedSeconds,
+      );
+      perspectiveState.current.rotation.z = wrapAngle(
+        perspectiveState.current.rotation.z + perspectiveState.spin.velocity.z * elapsedSeconds,
+      );
+
+      const damping = Math.exp(-4.2 * elapsedSeconds);
+      perspectiveState.spin.velocity.x *= damping;
+      perspectiveState.spin.velocity.y *= damping;
+      perspectiveState.spin.velocity.z *= damping;
+      perspectiveState.spin.lastTime = now;
+    }
+
+    const speed = Math.hypot(
+      perspectiveState.spin.velocity.x,
+      perspectiveState.spin.velocity.y,
+      perspectiveState.spin.velocity.z,
+    );
+
+    if (speed < 0.08) {
+      perspectiveState.spin = null;
+    } else {
+      requestRender();
+    }
+  }
 
   if (!perspectiveState.animation) {
     return perspectiveState.current
@@ -3180,6 +3229,7 @@ function requestRender() {
 function transitionPerspectiveExercise(next, duration = 560) {
   const perspectiveState = state.perspective;
   const from = getAnimationSnapshot() || perspectiveState.current;
+  perspectiveState.spin = null;
 
   if (!from) {
     perspectiveState.current = next;
@@ -3215,11 +3265,11 @@ function stepPerspectiveRotation(direction, axis = "horizontal") {
   const verticalStep = state.perspective.selectedMode === "three" ? 0.18 : 0.16;
 
   if (axis === "vertical") {
-    next.rotation.x = clamp(next.rotation.x + direction * verticalStep, -1.2, 1.2);
+    next.rotation.x = wrapAngle(next.rotation.x + direction * verticalStep);
   } else if (state.perspective.selectedMode === "one") {
-    next.rotation.z += direction * horizontalStep;
+    next.rotation.z = wrapAngle(next.rotation.z + direction * horizontalStep);
   } else {
-    next.rotation.y += direction * horizontalStep;
+    next.rotation.y = wrapAngle(next.rotation.y + direction * horizontalStep);
   }
 
   transitionPerspectiveExercise(next, 320);
@@ -3239,6 +3289,19 @@ function stepPerspectiveLift(direction) {
   transitionPerspectiveExercise(next, 260);
 }
 
+function centerPerspectiveOnHorizon() {
+  const current = getAnimationSnapshot() || state.perspective.current;
+
+  if (!current) {
+    setPerspectiveExercise(state.perspective.selectedShape);
+    return;
+  }
+
+  const next = cloneExercise(current);
+  next.center.y = 0;
+  transitionPerspectiveExercise(next, 260);
+}
+
 function handlePerspectivePointerDown(event) {
   if (state.mode !== "perspective") {
     return;
@@ -3250,12 +3313,17 @@ function handlePerspectivePointerDown(event) {
     return;
   }
 
+  const startPoint = getPointFromEvent(event);
   state.perspective.current = cloneExercise(snapshot);
   state.perspective.animation = null;
+  state.perspective.spin = null;
   state.perspective.interaction = {
     pointerId: event.pointerId,
-    startPoint: getPointFromEvent(event),
+    startPoint,
     startRotation: { ...state.perspective.current.rotation },
+    lastPoint: startPoint,
+    lastTime: performance.now(),
+    angularVelocity: { x: 0, y: 0, z: 0 },
   };
 
   canvas.setPointerCapture(event.pointerId);
@@ -3272,6 +3340,7 @@ function handlePerspectivePointerMove(event) {
   const point = getPointFromEvent(event);
   const dx = point.x - interaction.startPoint.x;
   const dy = point.y - interaction.startPoint.y;
+  const now = performance.now();
   const current = state.perspective.current;
 
   if (!current) {
@@ -3280,23 +3349,44 @@ function handlePerspectivePointerMove(event) {
 
   if (state.perspective.selectedMode === "one") {
     current.rotation = {
-      x: clamp(interaction.startRotation.x - dy * 0.008, -1.2, 1.2),
+      x: wrapAngle(interaction.startRotation.x - dy * 0.008),
       y: 0,
-      z: clamp(interaction.startRotation.z + dx * 0.008, -1.2, 1.2),
+      z: wrapAngle(interaction.startRotation.z + dx * 0.008),
     };
   } else if (state.perspective.selectedMode === "two") {
     current.rotation = {
-      x: clamp(interaction.startRotation.x - dy * 0.008, -1.2, 1.2),
-      y: interaction.startRotation.y + dx * 0.008,
+      x: wrapAngle(interaction.startRotation.x - dy * 0.008),
+      y: wrapAngle(interaction.startRotation.y + dx * 0.008),
       z: 0,
     };
   } else {
     current.rotation = {
-      x: clamp(interaction.startRotation.x - dy * 0.008, -1.2, 1.2),
-      y: interaction.startRotation.y + dx * 0.008,
+      x: wrapAngle(interaction.startRotation.x - dy * 0.008),
+      y: wrapAngle(interaction.startRotation.y + dx * 0.008),
       z: 0,
     };
   }
+
+  const elapsedMs = Math.max(1, now - interaction.lastTime);
+  const pointDeltaX = point.x - interaction.lastPoint.x;
+  const pointDeltaY = point.y - interaction.lastPoint.y;
+
+  if (state.perspective.selectedMode === "one") {
+    interaction.angularVelocity = {
+      x: (-pointDeltaY * 0.008 * 1000) / elapsedMs,
+      y: 0,
+      z: (pointDeltaX * 0.008 * 1000) / elapsedMs,
+    };
+  } else {
+    interaction.angularVelocity = {
+      x: (-pointDeltaY * 0.008 * 1000) / elapsedMs,
+      y: (pointDeltaX * 0.008 * 1000) / elapsedMs,
+      z: 0,
+    };
+  }
+
+  interaction.lastPoint = point;
+  interaction.lastTime = now;
 
   requestRender();
 }
@@ -3306,6 +3396,19 @@ function handlePerspectivePointerUp(event) {
     return;
   }
 
+  const speed = Math.hypot(
+    state.perspective.interaction.angularVelocity.x,
+    state.perspective.interaction.angularVelocity.y,
+    state.perspective.interaction.angularVelocity.z,
+  );
+
+  state.perspective.spin =
+    event.type === "pointerup" && speed > 0.35
+      ? {
+          velocity: { ...state.perspective.interaction.angularVelocity },
+          lastTime: performance.now(),
+        }
+      : null;
   state.perspective.interaction = null;
 
   if (canvas.hasPointerCapture(event.pointerId)) {
@@ -4416,7 +4519,11 @@ function handlePerspectiveClick(event) {
 
   if (liftButton) {
     switchMode("perspective");
-    stepPerspectiveLift(liftButton.dataset.lift === "up" ? 1 : -1);
+    if (liftButton.dataset.lift === "center") {
+      centerPerspectiveOnHorizon();
+    } else {
+      stepPerspectiveLift(liftButton.dataset.lift === "up" ? 1 : -1);
+    }
     return;
   }
 
