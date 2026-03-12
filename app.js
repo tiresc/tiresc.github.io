@@ -51,6 +51,8 @@ const faceDefinitions = [
   { name: "bottom", indices: [0, 1, 5, 4] },
 ];
 
+const facesByName = new Map(faceDefinitions.map((face) => [face.name, face]));
+
 const guideEdgePairs = [
   [0, 1],
   [2, 3],
@@ -64,6 +66,18 @@ const guideEdgePairs = [
   [1, 5],
   [2, 6],
   [3, 7],
+];
+
+const cylinderGuidePairs = [
+  { axis: "depth", faces: ["near", "far"] },
+  { axis: "width", faces: ["left", "right"] },
+  { axis: "height", faces: ["top", "bottom"] },
+];
+
+const unitCircleConic = [
+  [1, 0, -0.5],
+  [0, 1, -0.5],
+  [-0.5, -0.5, 0],
 ];
 
 const gestureSearchTerms = [
@@ -279,6 +293,7 @@ const state = {
     autoTimer: 0,
     showHidden: true,
     showGuides: false,
+    showCylinderGuides: false,
     zoomedOut: false,
     rafId: 0,
   },
@@ -302,6 +317,7 @@ const state = {
     shapes: [],
     selectedShapeId: null,
     showHidden: true,
+    showCylinderGuides: false,
     guides: null,
     photo: null,
     analysisReady: false,
@@ -610,6 +626,10 @@ function formatPerspectiveStatus() {
 
   if (state.perspective.showGuides) {
     fragments.push("guides");
+  }
+
+  if (state.perspective.showCylinderGuides) {
+    fragments.push("cylinder guides");
   }
 
   if (state.perspective.zoomedOut) {
@@ -1388,7 +1408,7 @@ function solveLinearSystem(matrix, values) {
   return system.map((row) => row[system.length]);
 }
 
-function buildQuadProjector(quad) {
+function buildQuadHomography(quad) {
   const source = [
     { u: 0, v: 0, target: quad[0] },
     { u: 1, v: 0, target: quad[1] },
@@ -1413,13 +1433,159 @@ function buildQuadProjector(quad) {
 
   const [a, b, c, d, e, f, g, h] = solution;
 
-  return (u, v) => {
-    const denominator = g * u + h * v + 1;
+  return {
+    matrix: [
+      [a, b, c],
+      [d, e, f],
+      [g, h, 1],
+    ],
+    project(u, v) {
+      const denominator = g * u + h * v + 1;
 
-    return {
-      x: (a * u + b * v + c) / denominator,
-      y: (d * u + e * v + f) / denominator,
-    };
+      return {
+        x: (a * u + b * v + c) / denominator,
+        y: (d * u + e * v + f) / denominator,
+      };
+    },
+  };
+}
+
+function buildQuadProjector(quad) {
+  const homography = buildQuadHomography(quad);
+  return homography ? homography.project.bind(homography) : null;
+}
+
+function transpose3x3(matrix) {
+  return matrix[0].map((_, column) => matrix.map((row) => row[column]));
+}
+
+function multiply3x3(left, right) {
+  return left.map((row) =>
+    right[0].map((_, column) =>
+      row.reduce((sum, value, index) => sum + value * right[index][column], 0),
+    ),
+  );
+}
+
+function invert3x3(matrix) {
+  const [
+    [a, b, c],
+    [d, e, f],
+    [g, h, i],
+  ] = matrix;
+  const cofactor00 = e * i - f * h;
+  const cofactor01 = -(d * i - f * g);
+  const cofactor02 = d * h - e * g;
+  const cofactor10 = -(b * i - c * h);
+  const cofactor11 = a * i - c * g;
+  const cofactor12 = -(a * h - b * g);
+  const cofactor20 = b * f - c * e;
+  const cofactor21 = -(a * f - c * d);
+  const cofactor22 = a * e - b * d;
+  const determinant = a * cofactor00 + b * cofactor01 + c * cofactor02;
+
+  if (Math.abs(determinant) < 0.0000001) {
+    return null;
+  }
+
+  const adjugate = [
+    [cofactor00, cofactor10, cofactor20],
+    [cofactor01, cofactor11, cofactor21],
+    [cofactor02, cofactor12, cofactor22],
+  ];
+
+  return adjugate.map((row) => row.map((value) => value / determinant));
+}
+
+function symmetrize3x3(matrix) {
+  return matrix.map((row, rowIndex) =>
+    row.map((value, columnIndex) => (value + matrix[columnIndex][rowIndex]) / 2),
+  );
+}
+
+function getFaceQuad(vertices, faceName) {
+  const face = facesByName.get(faceName);
+  return face ? face.indices.map((index) => vertices[index]) : null;
+}
+
+function getProjectedEllipseGuide(quad, segmentCount = 72) {
+  const homography = buildQuadHomography(quad);
+
+  if (!homography) {
+    return null;
+  }
+
+  const points = [];
+
+  for (let index = 0; index <= segmentCount; index += 1) {
+    const angle = (index / segmentCount) * Math.PI * 2;
+    points.push(homography.project(0.5 + 0.5 * Math.cos(angle), 0.5 + 0.5 * Math.sin(angle)));
+  }
+
+  const inverse = invert3x3(homography.matrix);
+
+  if (!inverse) {
+    return null;
+  }
+
+  const conic = symmetrize3x3(multiply3x3(transpose3x3(inverse), multiply3x3(unitCircleConic, inverse)));
+  const a = conic[0][0];
+  const b = conic[0][1];
+  const c = conic[1][1];
+  const d = conic[0][2];
+  const e = conic[1][2];
+  const f = conic[2][2];
+  const determinant = a * c - b * b;
+
+  if (Math.abs(determinant) < 0.0000001) {
+    return null;
+  }
+
+  const center = {
+    x: (b * e - c * d) / determinant,
+    y: (b * d - a * e) / determinant,
+  };
+  const centeredConstant =
+    a * center.x * center.x +
+    2 * b * center.x * center.y +
+    c * center.y * center.y +
+    2 * d * center.x +
+    2 * e * center.y +
+    f;
+  const trace = a + c;
+  const root = Math.sqrt((a - c) * (a - c) + 4 * b * b);
+  let majorRadius = Math.sqrt(-centeredConstant / ((trace - root) / 2));
+  let minorRadius = Math.sqrt(-centeredConstant / ((trace + root) / 2));
+
+  if (!Number.isFinite(majorRadius) || !Number.isFinite(minorRadius)) {
+    return null;
+  }
+
+  let majorDirection = {
+    x: Math.cos(0.5 * Math.atan2(2 * b, a - c)),
+    y: Math.sin(0.5 * Math.atan2(2 * b, a - c)),
+  };
+  let minorDirection = {
+    x: -majorDirection.y,
+    y: majorDirection.x,
+  };
+
+  if (minorRadius > majorRadius) {
+    [majorRadius, minorRadius] = [minorRadius, majorRadius];
+    [majorDirection, minorDirection] = [minorDirection, majorDirection];
+  }
+
+  return {
+    points,
+    center,
+    majorAxis: [
+      add2(center, scale2(majorDirection, -majorRadius)),
+      add2(center, scale2(majorDirection, majorRadius)),
+    ],
+    minorAxis: [
+      add2(center, scale2(minorDirection, -minorRadius)),
+      add2(center, scale2(minorDirection, minorRadius)),
+    ],
   };
 }
 
@@ -1989,6 +2155,59 @@ function drawPolyline(points, lineWidth, strokeStyle, dashPattern = []) {
   ctx.stroke();
 }
 
+function drawGuidePoint(point, radius, fillStyle) {
+  ctx.fillStyle = fillStyle;
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawCylinderGuideOverlay(vertices, faceVisibility, options) {
+  for (const pair of cylinderGuidePairs) {
+    const faceEntries = pair.faces.map((faceName) => {
+      const quad = getFaceQuad(vertices, faceName);
+      const guide = quad ? getProjectedEllipseGuide(quad) : null;
+
+      return guide
+        ? {
+            faceName,
+            guide,
+            visible: Boolean(faceVisibility.get(faceName)),
+          }
+        : null;
+    });
+
+    if (faceEntries.some((entry) => !entry)) {
+      continue;
+    }
+
+    for (const entry of faceEntries) {
+      if (!entry.visible && !options.showHidden) {
+        continue;
+      }
+
+      const strokeStyle = entry.visible ? options.visibleStroke : options.hiddenStroke;
+      const dashPattern = entry.visible ? [] : options.hiddenDash;
+      const lineWidth = entry.visible ? options.ellipseWidth : options.hiddenWidth;
+
+      drawPolyline(entry.guide.points, lineWidth, strokeStyle, dashPattern);
+      drawSingleLine(entry.guide.majorAxis[0], entry.guide.majorAxis[1], options.axisWidth, strokeStyle, dashPattern);
+      drawSingleLine(entry.guide.minorAxis[0], entry.guide.minorAxis[1], options.axisWidth, strokeStyle, dashPattern);
+      drawGuidePoint(entry.guide.center, options.centerRadius, strokeStyle);
+    }
+
+    if (options.showHidden || faceEntries.some((entry) => entry.visible)) {
+      drawSingleLine(
+        faceEntries[0].guide.center,
+        faceEntries[1].guide.center,
+        options.connectorWidth,
+        options.connectorStroke,
+        options.connectorDash,
+      );
+    }
+  }
+}
+
 function drawCustomPhoto() {
   const layout = getCustomPhotoLayout();
 
@@ -2089,6 +2308,22 @@ function drawCustomBox(shape, geometry) {
   }
 
   drawLineSegments(visibleEdges, visibleWidth, palette.visible);
+
+  if (state.custom.showCylinderGuides) {
+    drawCylinderGuideOverlay(geometry.vertices, faceVisibility, {
+      showHidden: state.custom.showHidden,
+      visibleStroke: palette.guideStrong,
+      hiddenStroke: palette.guide,
+      connectorStroke: palette.guideStrong,
+      ellipseWidth: Math.max(1.15, visibleWidth * 0.66),
+      hiddenWidth: Math.max(0.9, hiddenWidth * 0.82),
+      axisWidth: Math.max(0.95, visibleWidth * 0.5),
+      connectorWidth: Math.max(0.9, visibleWidth * 0.42),
+      centerRadius: Math.max(2.1, visibleWidth * 0.64),
+      hiddenDash: [8, 8],
+      connectorDash: [7, 8],
+    });
+  }
 
   if (shape.id === state.custom.selectedShapeId) {
     const bounds = getCustomShapeBounds(geometry);
@@ -2240,6 +2475,10 @@ function formatCustomStatus() {
 
   if (state.custom.showHidden) {
     fragments.push("draw-through");
+  }
+
+  if (state.custom.showCylinderGuides) {
+    fragments.push("cylinder guides");
   }
 
   return fragments.join(" • ");
@@ -2432,6 +2671,22 @@ function drawBox(exercise, projection) {
   }
 
   drawLineSegments(visibleEdges, visibleWidth, "#2b1d11");
+
+  if (state.perspective.showCylinderGuides) {
+    drawCylinderGuideOverlay(projectedVertices, faceVisibility, {
+      showHidden: state.perspective.showHidden,
+      visibleStroke: "rgba(171, 94, 37, 0.74)",
+      hiddenStroke: "rgba(171, 94, 37, 0.34)",
+      connectorStroke: "rgba(171, 94, 37, 0.48)",
+      ellipseWidth: Math.max(1.15, visibleWidth * 0.5),
+      hiddenWidth: Math.max(0.95, hiddenWidth * 0.76),
+      axisWidth: Math.max(1, visibleWidth * 0.42),
+      connectorWidth: Math.max(0.95, visibleWidth * 0.38),
+      centerRadius: Math.max(2.4, visibleWidth * 0.7),
+      hiddenDash: [8, 8],
+      connectorDash: [7, 8],
+    });
+  }
 }
 
 function buildRingSegments(worldPoints, projectedPoints, nearDirection) {
@@ -2576,6 +2831,8 @@ function syncPerspectiveControls() {
         ? state.perspective.showHidden
         : toggle === "guides"
           ? state.perspective.showGuides
+          : toggle === "cylinder-guides"
+            ? state.perspective.showCylinderGuides
           : toggle === "zoom"
             ? state.perspective.zoomedOut
             : state.perspective.autoShuffle;
@@ -2585,11 +2842,17 @@ function syncPerspectiveControls() {
 
   const hiddenButton = document.querySelector('[data-toggle="hidden"]');
   const guidesButton = document.querySelector('[data-toggle="guides"]');
+  const cylinderGuidesButton = document.querySelector('[data-toggle="cylinder-guides"]');
   const zoomButton = document.querySelector('[data-toggle="zoom"]');
   const autoButton = document.querySelector('[data-toggle="auto"]');
 
   hiddenButton.textContent = state.perspective.showHidden ? "Hidden Lines On" : "Hidden Lines Off";
   guidesButton.textContent = state.perspective.showGuides ? "Guides On" : "Guides Off";
+  if (cylinderGuidesButton) {
+    cylinderGuidesButton.textContent = state.perspective.showCylinderGuides
+      ? "Cylinder Guides On"
+      : "Cylinder Guides";
+  }
   zoomButton.textContent = state.perspective.zoomedOut ? "Zoom In" : "Zoom Out";
   autoButton.textContent = state.perspective.autoShuffle ? "Auto Shuffle On" : "Auto Shuffle";
 }
@@ -2640,14 +2903,26 @@ function syncCustomControls() {
   }
 
   for (const button of ui.customToggleButtons) {
-    const active = button.dataset.customToggle === "hidden" ? state.custom.showHidden : false;
+    const active =
+      button.dataset.customToggle === "hidden"
+        ? state.custom.showHidden
+        : button.dataset.customToggle === "cylinder-guides"
+          ? state.custom.showCylinderGuides
+          : false;
     button.setAttribute("aria-pressed", String(active));
   }
 
   const hiddenButton = document.querySelector('[data-custom-toggle="hidden"]');
+  const cylinderGuidesButton = document.querySelector('[data-custom-toggle="cylinder-guides"]');
 
   if (hiddenButton) {
     hiddenButton.textContent = state.custom.showHidden ? "Hidden Lines On" : "Hidden Lines Off";
+  }
+
+  if (cylinderGuidesButton) {
+    cylinderGuidesButton.textContent = state.custom.showCylinderGuides
+      ? "Cylinder Guides On"
+      : "Cylinder Guides";
   }
 }
 
@@ -3012,6 +3287,11 @@ function togglePerspectiveHidden() {
 
 function togglePerspectiveGuides() {
   state.perspective.showGuides = !state.perspective.showGuides;
+  requestRender();
+}
+
+function togglePerspectiveCylinderGuides() {
+  state.perspective.showCylinderGuides = !state.perspective.showCylinderGuides;
   requestRender();
 }
 
@@ -3637,6 +3917,11 @@ function toggleCustomHidden() {
   requestRender();
 }
 
+function toggleCustomCylinderGuides() {
+  state.custom.showCylinderGuides = !state.custom.showCylinderGuides;
+  requestRender();
+}
+
 function removeSelectedCustomShape() {
   if (!state.custom.selectedShapeId) {
     return;
@@ -4039,6 +4324,8 @@ function handlePerspectiveClick(event) {
       togglePerspectiveHidden();
     } else if (toggle === "guides") {
       togglePerspectiveGuides();
+    } else if (toggle === "cylinder-guides") {
+      togglePerspectiveCylinderGuides();
     } else if (toggle === "zoom") {
       togglePerspectiveZoom();
     } else if (toggle === "auto") {
@@ -4115,6 +4402,8 @@ function handlePerspectiveClick(event) {
   if (customToggleButton) {
     if (customToggleButton.dataset.customToggle === "hidden") {
       toggleCustomHidden();
+    } else if (customToggleButton.dataset.customToggle === "cylinder-guides") {
+      toggleCustomCylinderGuides();
     }
 
     return;
