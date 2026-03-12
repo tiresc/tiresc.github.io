@@ -2250,6 +2250,56 @@ function drawGuidePoint(point, radius, fillStyle) {
   ctx.fill();
 }
 
+function getCylinderGuideConnectorSets(faceEntries) {
+  const centerline = subtract2(faceEntries[1].guide.center, faceEntries[0].guide.center);
+  const length = Math.hypot(centerline.x, centerline.y);
+  const normal =
+    length > 0.0001
+      ? { x: -centerline.y / length, y: centerline.x / length }
+      : { x: 0, y: 1 };
+  const sideScore = faceEntries.reduce((sum, entry) => {
+    const { contourPoints, center } = entry.guide;
+    return (
+      sum +
+      Math.abs((contourPoints.sideA.x - center.x) * normal.x + (contourPoints.sideA.y - center.y) * normal.y) +
+      Math.abs((contourPoints.sideB.x - center.x) * normal.x + (contourPoints.sideB.y - center.y) * normal.y)
+    );
+  }, 0);
+  const hiddenScore = faceEntries.reduce((sum, entry) => {
+    const { contourPoints, center } = entry.guide;
+    return (
+      sum +
+      Math.abs((contourPoints.hiddenA.x - center.x) * normal.x + (contourPoints.hiddenA.y - center.y) * normal.y) +
+      Math.abs((contourPoints.hiddenB.x - center.x) * normal.x + (contourPoints.hiddenB.y - center.y) * normal.y)
+    );
+  }, 0);
+  const visibleKey = hiddenScore > sideScore ? "hidden" : "side";
+  const hiddenKey = visibleKey === "side" ? "hidden" : "side";
+
+  return {
+    visibleSegments: [
+      [
+        faceEntries[0].guide.contourPoints[`${visibleKey}A`],
+        faceEntries[1].guide.contourPoints[`${visibleKey}A`],
+      ],
+      [
+        faceEntries[0].guide.contourPoints[`${visibleKey}B`],
+        faceEntries[1].guide.contourPoints[`${visibleKey}B`],
+      ],
+    ],
+    hiddenSegments: [
+      [
+        faceEntries[0].guide.contourPoints[`${hiddenKey}A`],
+        faceEntries[1].guide.contourPoints[`${hiddenKey}A`],
+      ],
+      [
+        faceEntries[0].guide.contourPoints[`${hiddenKey}B`],
+        faceEntries[1].guide.contourPoints[`${hiddenKey}B`],
+      ],
+    ],
+  };
+}
+
 function drawCylinderGuideOverlay(vertices, faceVisibility, options) {
   for (const pair of cylinderGuidePairs) {
     const faceEntries = pair.faces.map((faceName) => {
@@ -2269,6 +2319,8 @@ function drawCylinderGuideOverlay(vertices, faceVisibility, options) {
       continue;
     }
 
+    const connectorSets = getCylinderGuideConnectorSets(faceEntries);
+
     for (const entry of faceEntries) {
       if (!entry.visible && !options.showHidden) {
         continue;
@@ -2284,25 +2336,10 @@ function drawCylinderGuideOverlay(vertices, faceVisibility, options) {
       drawGuidePoint(entry.guide.center, options.centerRadius, strokeStyle);
     }
 
-    drawLineSegments(
-      [
-        [faceEntries[0].guide.contourPoints.sideA, faceEntries[1].guide.contourPoints.sideA],
-        [faceEntries[0].guide.contourPoints.sideB, faceEntries[1].guide.contourPoints.sideB],
-      ],
-      options.contourWidth,
-      options.contourStroke,
-    );
+    drawLineSegments(connectorSets.visibleSegments, options.contourWidth, options.contourStroke);
 
     if (options.showHidden) {
-      drawLineSegments(
-        [
-          [faceEntries[0].guide.contourPoints.hiddenA, faceEntries[1].guide.contourPoints.hiddenA],
-          [faceEntries[0].guide.contourPoints.hiddenB, faceEntries[1].guide.contourPoints.hiddenB],
-        ],
-        options.hiddenWidth,
-        options.hiddenStroke,
-        options.hiddenDash,
-      );
+      drawLineSegments(connectorSets.hiddenSegments, options.hiddenWidth, options.hiddenStroke, options.hiddenDash);
     }
 
     if (options.showHidden || faceEntries.some((entry) => entry.visible)) {
