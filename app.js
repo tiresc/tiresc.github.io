@@ -15,6 +15,7 @@ const ui = {
   perspectiveButtons: document.querySelectorAll("[data-perspective-mode]"),
   toggleButtons: document.querySelectorAll("[data-toggle]"),
   rotateButtons: document.querySelectorAll("[data-rotate]"),
+  liftButtons: document.querySelectorAll("[data-lift]"),
   durationButtons: document.querySelectorAll("[data-duration]"),
   countButtons: document.querySelectorAll("[data-ref-count]"),
   gestureSourceButtons: document.querySelectorAll("[data-gesture-source]"),
@@ -1734,6 +1735,37 @@ function normalizeCustomShape(shape) {
   return shape;
 }
 
+function scaleCustomShape(shape, factor) {
+  const beforeGeometry = getCustomShapeGeometry(shape);
+  const beforeBounds = getCustomShapeBounds(beforeGeometry);
+  const beforeCenter = {
+    x: (beforeBounds.minX + beforeBounds.maxX) / 2,
+    y: (beforeBounds.minY + beforeBounds.maxY) / 2,
+  };
+
+  shape.width *= factor;
+  shape.height *= factor;
+  shape.depthT *= factor;
+  shape.xT *= factor;
+  shape.zT *= factor;
+  shape.yT *= factor;
+  normalizeCustomShape(shape);
+
+  const afterGeometry = getCustomShapeGeometry(shape);
+  const afterBounds = getCustomShapeBounds(afterGeometry);
+  const afterCenter = {
+    x: (afterBounds.minX + afterBounds.maxX) / 2,
+    y: (afterBounds.minY + afterBounds.maxY) / 2,
+  };
+
+  shape.origin = {
+    x: clamp(shape.origin.x + (beforeCenter.x - afterCenter.x), 28, state.view.width - 28),
+    y: clamp(shape.origin.y + (beforeCenter.y - afterCenter.y), 28, state.view.height - 28),
+  };
+
+  normalizeCustomShape(shape);
+}
+
 function getAutoCorrectParameters(shape) {
   if (state.custom.perspectiveMode === "one") {
     return [
@@ -2830,6 +2862,20 @@ function stepPerspectiveRotation(direction) {
   transitionPerspectiveExercise(next, 320);
 }
 
+function stepPerspectiveLift(direction) {
+  const current = getAnimationSnapshot() || state.perspective.current;
+
+  if (!current) {
+    setPerspectiveExercise(state.perspective.selectedShape);
+    return;
+  }
+
+  const next = cloneExercise(current);
+  const step = state.perspective.selectedMode === "three" ? 64 : 56;
+  next.center.y = clamp(next.center.y + direction * step, -220, 220);
+  transitionPerspectiveExercise(next, 260);
+}
+
 function handlePerspectivePointerDown(event) {
   if (state.mode !== "perspective") {
     return;
@@ -2903,6 +2949,22 @@ function handlePerspectivePointerUp(event) {
     canvas.releasePointerCapture(event.pointerId);
   }
 
+  requestRender();
+}
+
+function handleCustomWheel(event) {
+  if (state.mode !== "custom" || state.custom.placementKind) {
+    return;
+  }
+
+  const selectedShape = getCustomSelectedShape();
+
+  if (!selectedShape) {
+    return;
+  }
+
+  event.preventDefault();
+  scaleCustomShape(selectedShape, event.deltaY < 0 ? 1.06 : 0.94);
   requestRender();
 }
 
@@ -3580,6 +3642,17 @@ function clearCustomPhoto() {
   requestRender();
 }
 
+function stepCustomScale(direction) {
+  const selectedShape = getCustomSelectedShape();
+
+  if (!selectedShape) {
+    return;
+  }
+
+  scaleCustomShape(selectedShape, direction > 0 ? 1.08 : 0.92);
+  requestRender();
+}
+
 function analyzeCustomPhoto() {
   const result = analyzePhotoPerspective();
 
@@ -3911,6 +3984,7 @@ function handlePerspectiveClick(event) {
   const perspectiveButton = event.target.closest("[data-perspective-mode]");
   const toggleButton = event.target.closest("[data-toggle]");
   const rotateButton = event.target.closest("[data-rotate]");
+  const liftButton = event.target.closest("[data-lift]");
   const durationButton = event.target.closest("[data-duration]");
   const countButton = event.target.closest("[data-ref-count]");
   const gestureSourceButton = event.target.closest("[data-gesture-source]");
@@ -3956,6 +4030,12 @@ function handlePerspectiveClick(event) {
   if (rotateButton) {
     switchMode("perspective");
     stepPerspectiveRotation(rotateButton.dataset.rotate === "left" ? -1 : 1);
+    return;
+  }
+
+  if (liftButton) {
+    switchMode("perspective");
+    stepPerspectiveLift(liftButton.dataset.lift === "up" ? 1 : -1);
     return;
   }
 
@@ -4024,6 +4104,10 @@ function handlePerspectiveClick(event) {
 
     if (customActionButton.dataset.customAction === "analyze-photo") {
       analyzeCustomPhoto();
+    } else if (customActionButton.dataset.customAction === "smaller") {
+      stepCustomScale(-1);
+    } else if (customActionButton.dataset.customAction === "larger") {
+      stepCustomScale(1);
     } else if (customActionButton.dataset.customAction === "center-guides") {
       resetCustomGuides();
     } else if (customActionButton.dataset.customAction === "delete-shape") {
@@ -4100,6 +4184,16 @@ function handleKeyboard(event) {
       return;
     }
 
+    if (key === "-" || key === "_") {
+      stepCustomScale(-1);
+      return;
+    }
+
+    if (key === "=" || key === "+") {
+      stepCustomScale(1);
+      return;
+    }
+
     if (key === "delete" || key === "backspace") {
       removeSelectedCustomShape();
       return;
@@ -4111,6 +4205,14 @@ function handleKeyboard(event) {
     state.mode = "perspective";
     syncUi();
     setPerspectiveExercise(state.perspective.selectedShape);
+  } else if (key === "arrowup") {
+    event.preventDefault();
+    switchMode("perspective");
+    stepPerspectiveLift(1);
+  } else if (key === "arrowdown") {
+    event.preventDefault();
+    switchMode("perspective");
+    stepPerspectiveLift(-1);
   } else if (key === "r") {
     if (state.mode === "gesture") {
       return;
@@ -4178,6 +4280,7 @@ canvas.addEventListener("pointerdown", handlePerspectivePointerDown);
 canvas.addEventListener("pointermove", handlePerspectivePointerMove);
 canvas.addEventListener("pointerup", handlePerspectivePointerUp);
 canvas.addEventListener("pointercancel", handlePerspectivePointerUp);
+canvas.addEventListener("wheel", handleCustomWheel, { passive: false });
 ui.gestureImage.addEventListener("error", () => {
   const fallbackSrc = ui.gestureImage.dataset.fallbackSrc;
 
