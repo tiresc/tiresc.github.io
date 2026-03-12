@@ -411,6 +411,15 @@ function getLineIntersection(a, b, c, d) {
   };
 }
 
+function getVerticalLineIntersection(columnPoint, rayStart, rayTarget) {
+  return getLineIntersection(
+    columnPoint,
+    { x: columnPoint.x, y: columnPoint.y + 1 },
+    rayStart,
+    rayTarget,
+  );
+}
+
 function getRayParameter(start, target, point) {
   const ray = subtract2(target, start);
   const lengthSquared = ray.x * ray.x + ray.y * ray.y;
@@ -1246,12 +1255,22 @@ function getCustomShapeGeometry(shape) {
     const xHandle = lerpPoint(origin, guides.vp1, shape.xT);
     const zHandle = lerpPoint(origin, guides.vp2, shape.zT);
     const yHandle = { x: origin.x, y: origin.y + shape.height * shape.verticalSign };
-    const xyHandle = { x: xHandle.x, y: yHandle.y };
-    const yzHandle = { x: zHandle.x, y: yHandle.y };
     const xzHandle =
       getLineIntersection(xHandle, guides.vp2, zHandle, guides.vp1) ||
       add2(lerpPoint(origin, guides.vp1, shape.xT), subtract2(zHandle, origin));
-    const xyzHandle = { x: xzHandle.x, y: yHandle.y };
+    const xyHandle =
+      getVerticalLineIntersection(xHandle, yHandle, guides.vp1) ||
+      getLineIntersection(yHandle, guides.vp1, xHandle, { x: xHandle.x, y: xHandle.y + 1 }) ||
+      { x: xHandle.x, y: yHandle.y };
+    const yzHandle =
+      getVerticalLineIntersection(zHandle, yHandle, guides.vp2) ||
+      getLineIntersection(yHandle, guides.vp2, zHandle, { x: zHandle.x, y: zHandle.y + 1 }) ||
+      { x: zHandle.x, y: yHandle.y };
+    const xyzHandle =
+      getVerticalLineIntersection(xzHandle, xyHandle, guides.vp2) ||
+      getVerticalLineIntersection(xzHandle, yzHandle, guides.vp1) ||
+      getLineIntersection(xyHandle, guides.vp2, yzHandle, guides.vp1) ||
+      { x: xzHandle.x, y: yHandle.y };
 
     return {
       vertices: [origin, xHandle, yHandle, xyHandle, zHandle, xzHandle, yzHandle, xyzHandle],
@@ -2020,6 +2039,8 @@ function drawCustomGuides() {
     } else {
       drawSingleLine(handles.origin, guides.vp1, 1.1, palette.guide, [5, 9]);
       drawSingleLine(handles.origin, guides.vp2, 1.1, palette.guide, [5, 9]);
+      drawSingleLine(handles.y, guides.vp1, 1.1, palette.guide, [5, 9]);
+      drawSingleLine(handles.y, guides.vp2, 1.1, palette.guide, [5, 9]);
       drawSingleLine(handles.x, guides.vp2, 1.1, palette.guide, [5, 9]);
       drawSingleLine(handles.z, guides.vp1, 1.1, palette.guide, [5, 9]);
 
