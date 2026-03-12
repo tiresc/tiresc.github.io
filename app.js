@@ -6,9 +6,38 @@ const ui = {
   size: document.querySelector("[data-size]"),
   view: document.querySelector("[data-view]"),
   status: document.querySelector("[data-status]"),
-  autoButton: document.querySelector('[data-action="auto"]'),
-  hiddenButton: document.querySelector('[data-action="hidden"]'),
-  guidesButton: document.querySelector('[data-action="guides"]'),
+  stageLabel: document.querySelector("[data-stage-label]"),
+  stageTitle: document.querySelector("[data-stage-title]"),
+  modeButtons: Array.from(document.querySelectorAll("[data-mode]")),
+  panels: Array.from(document.querySelectorAll("[data-panel]")),
+  stages: Array.from(document.querySelectorAll("[data-stage]")),
+  shapeButtons: Array.from(document.querySelectorAll("[data-shape]")),
+  perspectiveButtons: Array.from(document.querySelectorAll("[data-perspective-mode]")),
+  toggleButtons: {
+    auto: document.querySelector('[data-toggle="auto"]'),
+    hidden: document.querySelector('[data-toggle="hidden"]'),
+    guides: document.querySelector('[data-toggle="guides"]'),
+    zoom: document.querySelector('[data-toggle="zoom"]'),
+  },
+  gesture: {
+    durationButtons: Array.from(document.querySelectorAll("[data-duration]")),
+    refCountButtons: Array.from(document.querySelectorAll("[data-ref-count]")),
+    startButton: document.querySelector('[data-gesture-action="start"]'),
+    nextButton: document.querySelector('[data-gesture-action="next"]'),
+    endButton: document.querySelector('[data-gesture-action="end"]'),
+    time: document.querySelector("[data-gesture-time]"),
+    progress: document.querySelector("[data-gesture-progress]"),
+    sourceName: document.querySelector("[data-gesture-source-name]"),
+    sourceTitle: document.querySelector("[data-gesture-source-title]"),
+    sourceLink: document.querySelector("[data-gesture-source-link]"),
+    note: document.querySelector("[data-gesture-note]"),
+    summary: document.querySelector("[data-gesture-summary]"),
+    gallery: document.querySelector("[data-gesture-gallery]"),
+    image: document.querySelector("[data-gesture-image]"),
+    placeholder: document.querySelector("[data-gesture-placeholder]"),
+    timerPill: document.querySelector("[data-gesture-timer-pill]"),
+    counterPill: document.querySelector("[data-gesture-counter-pill]"),
+  },
 };
 
 const faceDefinitions = [
@@ -39,13 +68,41 @@ const guideEdgePairs = [
 const state = {
   current: null,
   animation: null,
+  mode: "perspective",
+  selectedShape: "random",
+  perspectiveMode: "three",
   autoShuffle: false,
   showHidden: true,
   showGuides: false,
+  zoomedOut: false,
   autoTimer: 0,
   rafId: 0,
   view: { width: 0, height: 0 },
+  gesture: {
+    duration: 120000,
+    refCount: 10,
+    active: false,
+    loading: false,
+    complete: false,
+    remaining: 120000,
+    deadline: 0,
+    timerId: 0,
+    requestId: 0,
+    currentRef: null,
+    used: [],
+    error: "",
+  },
 };
+
+const gestureNote =
+  "Gesture references are pulled from Wikimedia Commons so the app works without API keys or local setup.";
+const gestureSearchTerms = [
+  "dancer full body photograph",
+  "athlete movement photograph",
+  "martial arts pose photograph",
+  "standing figure photograph",
+  "human body pose photograph",
+];
 
 function buildEdges(faces) {
   const map = new Map();
@@ -231,19 +288,21 @@ function describeView(rotation) {
 }
 
 function formatStatus() {
-  if (state.showHidden && state.showGuides) {
-    return "Hidden lines + guides";
-  }
-
-  if (state.showHidden) {
-    return "Hidden lines visible";
-  }
+  const details = [state.showHidden ? "Hidden lines on" : "Hidden lines off"];
 
   if (state.showGuides) {
-    return "Perspective guides visible";
+    details.push("guides");
   }
 
-  return "Clean silhouette view";
+  if (state.zoomedOut) {
+    details.push("zoomed out");
+  }
+
+  if (state.autoShuffle) {
+    details.push("auto");
+  }
+
+  return details.join(" / ");
 }
 
 function formatKind(kind) {
@@ -256,6 +315,189 @@ function formatKind(kind) {
   }
 
   return "Box";
+}
+
+function formatPerspectiveMode(mode) {
+  if (mode === "one") {
+    return "1-point";
+  }
+
+  if (mode === "two") {
+    return "2-point";
+  }
+
+  return "3-point";
+}
+
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatGestureProgress(count = state.gesture.used.length) {
+  if (state.gesture.refCount === 0) {
+    return `${count} / unlimited`;
+  }
+
+  return `${Math.min(count, state.gesture.refCount)} / ${state.gesture.refCount}`;
+}
+
+function setButtonState(button, isActive) {
+  if (!button) {
+    return;
+  }
+
+  button.setAttribute("aria-pressed", String(isActive));
+  button.classList.toggle("button-primary", isActive);
+}
+
+function updateModeButtons() {
+  for (const button of ui.modeButtons) {
+    setButtonState(button, button.dataset.mode === state.mode);
+  }
+}
+
+function updatePerspectiveButtons() {
+  for (const button of ui.shapeButtons) {
+    setButtonState(button, button.dataset.shape === state.selectedShape);
+  }
+
+  for (const button of ui.perspectiveButtons) {
+    setButtonState(button, button.dataset.perspectiveMode === state.perspectiveMode);
+  }
+
+  ui.toggleButtons.hidden.textContent = state.showHidden ? "Hidden Lines On" : "Hidden Lines Off";
+  setButtonState(ui.toggleButtons.hidden, state.showHidden);
+
+  ui.toggleButtons.guides.textContent = state.showGuides ? "Guides On" : "Guides Off";
+  setButtonState(ui.toggleButtons.guides, state.showGuides);
+
+  ui.toggleButtons.zoom.textContent = state.zoomedOut ? "Zoom In" : "Zoom Out";
+  setButtonState(ui.toggleButtons.zoom, state.zoomedOut);
+
+  ui.toggleButtons.auto.textContent = state.autoShuffle ? "Auto Shuffle On" : "Auto Shuffle";
+  setButtonState(ui.toggleButtons.auto, state.autoShuffle);
+}
+
+function updateGestureButtons() {
+  for (const button of ui.gesture.durationButtons) {
+    setButtonState(button, Number(button.dataset.duration) === state.gesture.duration);
+  }
+
+  for (const button of ui.gesture.refCountButtons) {
+    setButtonState(button, Number(button.dataset.refCount) === state.gesture.refCount);
+  }
+
+  ui.gesture.startButton.textContent =
+    state.gesture.active || state.gesture.used.length > 0 ? "Restart Session" : "Start Session";
+  ui.gesture.startButton.classList.add("button-primary");
+  ui.gesture.nextButton.disabled = state.gesture.loading;
+  ui.gesture.endButton.disabled = state.gesture.loading;
+}
+
+function updateStageCopy() {
+  if (state.mode === "gesture") {
+    ui.stageLabel.textContent = "Gesture Session";
+    ui.stageTitle.textContent = state.gesture.currentRef?.title ?? "Timed reference drawing";
+
+    if (state.gesture.loading) {
+      ui.status.textContent = "Loading reference";
+    } else if (state.gesture.complete) {
+      ui.status.textContent = "Session complete";
+    } else if (state.gesture.active) {
+      ui.status.textContent = formatGestureProgress();
+    } else if (state.gesture.used.length > 0) {
+      ui.status.textContent = "Session paused";
+    } else {
+      ui.status.textContent = "Session idle";
+    }
+
+    return;
+  }
+
+  ui.stageLabel.textContent = "Perspective Drill";
+  ui.stageTitle.textContent = "Draw through the full form";
+  ui.status.textContent = formatStatus();
+}
+
+function renderGestureGallery() {
+  ui.gesture.gallery.replaceChildren();
+
+  for (const [index, reference] of state.gesture.used.entries()) {
+    const card = document.createElement("article");
+    const link = document.createElement("a");
+    const image = document.createElement("img");
+    const number = document.createElement("span");
+    const title = document.createElement("span");
+
+    card.className = "reference-card";
+    number.className = "reference-index";
+    title.className = "reference-title";
+
+    link.href = reference.sourceUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+
+    image.src = reference.thumbUrl || reference.imageUrl;
+    image.alt = reference.title;
+    image.loading = "lazy";
+
+    number.textContent = `Ref ${index + 1}`;
+    title.textContent = reference.title;
+
+    link.append(image, number, title);
+    card.append(link);
+    ui.gesture.gallery.append(card);
+  }
+
+  ui.gesture.summary.hidden = state.gesture.used.length === 0;
+}
+
+function updateGestureDisplay() {
+  const remaining = state.gesture.currentRef ? state.gesture.remaining : state.gesture.duration;
+  const timeLabel = formatDuration(remaining);
+  const progressLabel = formatGestureProgress();
+  const reference = state.gesture.currentRef;
+
+  ui.gesture.time.textContent = timeLabel;
+  ui.gesture.timerPill.textContent = timeLabel;
+  ui.gesture.progress.textContent = progressLabel;
+  ui.gesture.counterPill.textContent = progressLabel;
+  ui.gesture.sourceName.textContent = reference?.sourceName ?? "Internet";
+  ui.gesture.sourceTitle.textContent =
+    state.gesture.loading && !reference
+      ? "Loading next reference..."
+      : reference?.title ?? "No pose loaded yet";
+  ui.gesture.sourceLink.hidden = !reference;
+
+  if (reference) {
+    ui.gesture.sourceLink.href = reference.sourceUrl;
+    ui.gesture.image.src = reference.imageUrl;
+    ui.gesture.image.alt = reference.title;
+  }
+
+  ui.gesture.image.hidden = !reference;
+  ui.gesture.placeholder.hidden = Boolean(reference);
+
+  if (!reference) {
+    ui.gesture.placeholder.textContent = state.gesture.loading
+      ? "Loading the next Wikimedia Commons reference..."
+      : state.gesture.error || "Select a time limit, choose how many references you want, and start a session.";
+  }
+
+  ui.gesture.note.textContent = state.gesture.error || gestureNote;
+
+  renderGestureGallery();
+  updateGestureButtons();
+  updateStageCopy();
 }
 
 function countVisibleFaces(exercise) {
@@ -296,7 +538,7 @@ function resolveExerciseKind(mode) {
   return "box";
 }
 
-function buildExerciseCandidate(mode = "random") {
+function buildExerciseCandidate(mode = "random", perspectiveMode = state.perspectiveMode) {
   const kind = resolveExerciseKind(mode);
   const base = randomBetween(170, 290);
 
@@ -319,9 +561,23 @@ function buildExerciseCandidate(mode = "random") {
     };
   }
 
-  const xTilt = randomBetween(0.34, 0.82) * randomFrom([-1, 1]);
-  const yTurn = randomBetween(0.58, 1.08) * randomFrom([-1, 1]);
-  const zRoll = randomBetween(-0.14, 0.14);
+  let xTilt;
+  let yTurn;
+  let zRoll;
+
+  if (perspectiveMode === "one") {
+    xTilt = randomBetween(0.14, 0.32) * randomFrom([-1, 1]);
+    yTurn = randomBetween(-0.16, 0.16);
+    zRoll = randomBetween(-0.03, 0.03);
+  } else if (perspectiveMode === "two") {
+    xTilt = randomBetween(0.08, 0.24) * randomFrom([-1, 1]);
+    yTurn = randomBetween(0.58, 1.04) * randomFrom([-1, 1]);
+    zRoll = randomBetween(-0.05, 0.05);
+  } else {
+    xTilt = randomBetween(0.34, 0.82) * randomFrom([-1, 1]);
+    yTurn = randomBetween(0.58, 1.08) * randomFrom([-1, 1]);
+    zRoll = randomBetween(-0.14, 0.14);
+  }
 
   return {
     kind,
@@ -335,21 +591,23 @@ function buildExerciseCandidate(mode = "random") {
   };
 }
 
-function createExercise(mode = "random") {
+function createExercise(mode = state.selectedShape, perspectiveMode = state.perspectiveMode) {
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const candidate = buildExerciseCandidate(mode);
+    const candidate = buildExerciseCandidate(mode, perspectiveMode);
 
     const isReadable =
       candidate.kind === "cylinder"
         ? isReadableCylinder(candidate)
-        : countVisibleFaces(candidate) === 3;
+        : perspectiveMode === "one"
+          ? countVisibleFaces(candidate) >= 2
+          : countVisibleFaces(candidate) === 3;
 
     if (isReadable) {
       return candidate;
     }
   }
 
-  return buildExerciseCandidate(mode);
+  return buildExerciseCandidate(mode, perspectiveMode);
 }
 
 function interpolateExercise(from, to, t, kind = t < 0.5 ? from.kind : to.kind) {
@@ -379,13 +637,9 @@ function updateInfo(exercise) {
     exercise.kind === "cylinder"
       ? `${Math.round(exercise.dimensions.x)} dia × ${Math.round(exercise.dimensions.y)} h`
       : `${Math.round(exercise.dimensions.x)} × ${Math.round(exercise.dimensions.y)} × ${Math.round(exercise.dimensions.z)}`;
-  ui.view.textContent = describeView(exercise.rotation);
-  ui.status.textContent = formatStatus();
-  ui.hiddenButton.textContent = state.showHidden ? "Hidden Lines On" : "Hidden Lines Off";
-  ui.hiddenButton.setAttribute("aria-pressed", String(state.showHidden));
-  ui.guidesButton.textContent = state.showGuides ? "Guides On" : "Guides Off";
-  ui.guidesButton.setAttribute("aria-pressed", String(state.showGuides));
-  ui.autoButton.setAttribute("aria-pressed", String(state.autoShuffle));
+  ui.view.textContent = `${formatPerspectiveMode(state.perspectiveMode)} / ${describeView(exercise.rotation)}`;
+  updatePerspectiveButtons();
+  updateStageCopy();
 }
 
 function ensureCanvasSize() {
@@ -645,9 +899,13 @@ function drawSingleLine(start, end, lineWidth, strokeStyle, dashPattern = []) {
   ctx.stroke();
 }
 
+function getFocalLength(width, height) {
+  return Math.min(width, height) * (state.zoomedOut ? 0.88 : 1.16);
+}
+
 function drawPerspectiveGuides(exercise, alpha = 1) {
   const { width, height } = state.view;
-  const focalLength = Math.min(width, height) * 1.16;
+  const focalLength = getFocalLength(width, height);
   const origin = { x: width / 2, y: height / 2 };
   const guideDimensions =
     exercise.kind === "cylinder"
@@ -826,7 +1084,7 @@ function drawCylinder(exercise, origin, focalLength) {
 
 function drawExercise(exercise, alpha = 1) {
   const { width, height } = state.view;
-  const focalLength = Math.min(width, height) * 1.16;
+  const focalLength = getFocalLength(width, height);
   const origin = { x: width / 2, y: height / 2 };
 
   ctx.save();
@@ -843,6 +1101,10 @@ function drawExercise(exercise, alpha = 1) {
 }
 
 function render(now = performance.now()) {
+  if (state.mode !== "perspective") {
+    return;
+  }
+
   ensureCanvasSize();
   drawPaper(state.view);
 
@@ -871,6 +1133,10 @@ function render(now = performance.now()) {
 }
 
 function requestRender() {
+  if (state.mode !== "perspective") {
+    return;
+  }
+
   if (state.rafId) {
     return;
   }
@@ -881,9 +1147,9 @@ function requestRender() {
   });
 }
 
-function setExercise(mode = "random") {
+function setExercise(mode = state.selectedShape) {
   const from = getAnimationSnapshot() || state.current;
-  const next = createExercise(mode);
+  const next = createExercise(mode, state.perspectiveMode);
 
   if (!from) {
     state.current = next;
@@ -906,14 +1172,14 @@ function toggleAutoShuffle() {
 
   if (state.autoShuffle) {
     state.autoTimer = window.setInterval(() => {
-      setExercise("random");
+      setExercise(state.selectedShape);
     }, 2800);
   } else if (state.autoTimer) {
     window.clearInterval(state.autoTimer);
     state.autoTimer = 0;
   }
 
-  updateInfo(state.current || createExercise("random"));
+  updateInfo(state.current || createExercise(state.selectedShape, state.perspectiveMode));
 }
 
 function toggleHiddenEdges() {
@@ -940,31 +1206,336 @@ function toggleGuides() {
   requestRender();
 }
 
-document.querySelector(".controls").addEventListener("click", (event) => {
-  const button = event.target.closest("button[data-action]");
+function toggleZoom() {
+  state.zoomedOut = !state.zoomedOut;
+
+  const infoExercise = state.animation ? state.animation.to : state.current;
+
+  if (infoExercise) {
+    updateInfo(infoExercise);
+  }
+
+  requestRender();
+}
+
+function stopGestureTimer() {
+  if (!state.gesture.timerId) {
+    return;
+  }
+
+  window.clearInterval(state.gesture.timerId);
+  state.gesture.timerId = 0;
+}
+
+function finishGestureSession({ complete = false } = {}) {
+  state.gesture.requestId += 1;
+  stopGestureTimer();
+  state.gesture.loading = false;
+  state.gesture.active = false;
+  state.gesture.complete = complete;
+  state.gesture.remaining = complete ? 0 : state.gesture.remaining || state.gesture.duration;
+  updateGestureDisplay();
+}
+
+function preloadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(url);
+    image.onerror = () => reject(new Error("Image failed to load."));
+    image.src = url;
+  });
+}
+
+async function fetchGestureReference() {
+  const searchPool = [...gestureSearchTerms].sort(() => Math.random() - 0.5);
+
+  for (const term of searchPool) {
+    const params = new URLSearchParams({
+      action: "query",
+      format: "json",
+      formatversion: "2",
+      generator: "search",
+      gsrsearch: term,
+      gsrnamespace: "6",
+      gsrlimit: "20",
+      prop: "imageinfo|info",
+      inprop: "url",
+      iiprop: "url",
+      iiurlwidth: "1400",
+      origin: "*",
+    });
+    const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`);
+
+    if (!response.ok) {
+      continue;
+    }
+
+    const data = await response.json();
+    const pages = (data.query?.pages ?? []).filter((page) => page.imageinfo?.[0]?.thumburl || page.imageinfo?.[0]?.url);
+
+    if (pages.length === 0) {
+      continue;
+    }
+
+    const page = randomFrom(pages);
+    const info = page.imageinfo[0];
+
+    return {
+      title: page.title.replace(/^File:/, "").replace(/_/g, " "),
+      imageUrl: info.thumburl || info.url,
+      thumbUrl: info.thumburl || info.url,
+      sourceUrl: page.fullurl || info.descriptionurl,
+      sourceName: "Wikimedia Commons",
+    };
+  }
+
+  throw new Error("No Wikimedia references were returned.");
+}
+
+function startGestureTimer() {
+  stopGestureTimer();
+  state.gesture.remaining = state.gesture.duration;
+  state.gesture.deadline = Date.now() + state.gesture.duration;
+  state.gesture.timerId = window.setInterval(() => {
+    state.gesture.remaining = Math.max(0, state.gesture.deadline - Date.now());
+    updateGestureDisplay();
+
+    if (state.gesture.remaining > 0) {
+      return;
+    }
+
+    stopGestureTimer();
+
+    if (state.gesture.refCount > 0 && state.gesture.used.length >= state.gesture.refCount) {
+      finishGestureSession({ complete: true });
+      return;
+    }
+
+    void nextGesturePose();
+  }, 250);
+}
+
+async function loadGestureReference() {
+  const requestId = state.gesture.requestId + 1;
+  state.gesture.requestId = requestId;
+  state.gesture.loading = true;
+  state.gesture.active = false;
+  state.gesture.complete = false;
+  state.gesture.error = "";
+  updateGestureDisplay();
+
+  try {
+    const reference = await fetchGestureReference();
+    await preloadImage(reference.imageUrl);
+
+    if (requestId !== state.gesture.requestId) {
+      return;
+    }
+
+    state.gesture.currentRef = reference;
+    state.gesture.used = [...state.gesture.used, reference];
+    state.gesture.loading = false;
+    state.gesture.active = true;
+    state.gesture.remaining = state.gesture.duration;
+    startGestureTimer();
+    updateGestureDisplay();
+  } catch (error) {
+    if (requestId !== state.gesture.requestId) {
+      return;
+    }
+
+    state.gesture.loading = false;
+    state.gesture.active = false;
+    state.gesture.error = "Could not load a Wikimedia reference right now. Try again.";
+    updateGestureDisplay();
+  }
+}
+
+async function startGestureSession() {
+  setMode("gesture");
+  stopGestureTimer();
+  state.gesture.used = [];
+  state.gesture.currentRef = null;
+  state.gesture.loading = false;
+  state.gesture.complete = false;
+  state.gesture.remaining = state.gesture.duration;
+  state.gesture.error = "";
+  updateGestureDisplay();
+  await loadGestureReference();
+}
+
+async function nextGesturePose() {
+  setMode("gesture");
+
+  if (state.gesture.loading) {
+    return;
+  }
+
+  if (state.gesture.refCount > 0 && state.gesture.used.length >= state.gesture.refCount) {
+    finishGestureSession({ complete: true });
+    return;
+  }
+
+  stopGestureTimer();
+  await loadGestureReference();
+}
+
+function endGestureSession() {
+  finishGestureSession();
+}
+
+function setMode(mode) {
+  if (mode !== "perspective" && mode !== "gesture") {
+    return;
+  }
+
+  if (state.mode === "gesture" && mode !== "gesture" && state.gesture.active) {
+    stopGestureTimer();
+    state.gesture.active = false;
+  }
+
+  state.mode = mode;
+
+  for (const panel of ui.panels) {
+    panel.hidden = panel.dataset.panel !== mode;
+  }
+
+  for (const stage of ui.stages) {
+    stage.hidden = stage.dataset.stage !== mode;
+  }
+
+  updateModeButtons();
+
+  if (mode === "gesture") {
+    updateGestureDisplay();
+    return;
+  }
+
+  const infoExercise = state.animation ? state.animation.to : state.current;
+
+  if (infoExercise) {
+    updateInfo(infoExercise);
+  } else {
+    updateStageCopy();
+  }
+
+  requestRender();
+}
+
+function setShapeMode(mode) {
+  state.selectedShape = mode;
+  updatePerspectiveButtons();
+  setExercise(mode);
+}
+
+function setPerspectiveMode(mode) {
+  state.perspectiveMode = mode;
+  updatePerspectiveButtons();
+  setExercise(state.selectedShape);
+}
+
+function setGestureDuration(duration) {
+  state.gesture.duration = duration;
+  state.gesture.complete = false;
+
+  if (state.gesture.active) {
+    void nextGesturePose();
+    return;
+  }
+
+  updateGestureDisplay();
+}
+
+function setGestureRefCount(refCount) {
+  state.gesture.refCount = refCount;
+
+  if (refCount > 0 && state.gesture.active && state.gesture.used.length >= refCount) {
+    finishGestureSession({ complete: true });
+    return;
+  }
+
+  if (refCount > 0 && state.gesture.used.length >= refCount) {
+    state.gesture.complete = true;
+  } else {
+    state.gesture.complete = false;
+  }
+
+  updateGestureDisplay();
+}
+
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) {
+    return;
+  }
+
+  const button = event.target.closest("button");
 
   if (!button) {
     return;
   }
 
-  const action = button.dataset.action;
+  if (button.dataset.mode) {
+    setMode(button.dataset.mode);
+    return;
+  }
 
-  if (action === "auto") {
+  if (button.dataset.shape) {
+    setMode("perspective");
+    setShapeMode(button.dataset.shape);
+    return;
+  }
+
+  if (button.dataset.perspectiveMode) {
+    setMode("perspective");
+    setPerspectiveMode(button.dataset.perspectiveMode);
+    return;
+  }
+
+  if (button.dataset.toggle === "auto") {
     toggleAutoShuffle();
     return;
   }
 
-  if (action === "hidden") {
+  if (button.dataset.toggle === "hidden") {
     toggleHiddenEdges();
     return;
   }
 
-  if (action === "guides") {
+  if (button.dataset.toggle === "guides") {
     toggleGuides();
     return;
   }
 
-  setExercise(action);
+  if (button.dataset.toggle === "zoom") {
+    toggleZoom();
+    return;
+  }
+
+  if (button.dataset.duration) {
+    setMode("gesture");
+    setGestureDuration(Number(button.dataset.duration));
+    return;
+  }
+
+  if (button.dataset.refCount) {
+    setMode("gesture");
+    setGestureRefCount(Number(button.dataset.refCount));
+    return;
+  }
+
+  if (button.dataset.gestureAction === "start") {
+    void startGestureSession();
+    return;
+  }
+
+  if (button.dataset.gestureAction === "next") {
+    void nextGesturePose();
+    return;
+  }
+
+  if (button.dataset.gestureAction === "end") {
+    endGestureSession();
+  }
 });
 
 window.addEventListener("resize", () => {
@@ -980,20 +1551,45 @@ window.addEventListener("keydown", (event) => {
 
   if (key === " ") {
     event.preventDefault();
-    setExercise("random");
+    setMode("perspective");
+    setExercise(state.selectedShape);
   } else if (key === "c") {
-    setExercise("cube");
+    setMode("perspective");
+    setShapeMode("cube");
   } else if (key === "b") {
-    setExercise("box");
+    setMode("perspective");
+    setShapeMode("box");
   } else if (key === "l") {
-    setExercise("cylinder");
-  } else if (key === "h") {
+    setMode("perspective");
+    setShapeMode("cylinder");
+  } else if (key === "1") {
+    setMode("perspective");
+    setPerspectiveMode("one");
+  } else if (key === "2") {
+    setMode("perspective");
+    setPerspectiveMode("two");
+  } else if (key === "3") {
+    setMode("perspective");
+    setPerspectiveMode("three");
+  } else if (key === "h" && state.mode === "perspective") {
     toggleHiddenEdges();
-  } else if (key === "g") {
+  } else if (key === "g" && state.mode === "perspective") {
     toggleGuides();
-  } else if (key === "a") {
+  } else if (key === "z" && state.mode === "perspective") {
+    toggleZoom();
+  } else if (key === "a" && state.mode === "perspective") {
     toggleAutoShuffle();
+  } else if (key === "s" && state.mode === "gesture") {
+    void startGestureSession();
+  } else if (key === "n" && state.mode === "gesture") {
+    void nextGesturePose();
+  } else if (key === "e" && state.mode === "gesture") {
+    endGestureSession();
   }
 });
 
-setExercise("random");
+updateModeButtons();
+updatePerspectiveButtons();
+updateGestureDisplay();
+setMode("perspective");
+setExercise(state.selectedShape);
