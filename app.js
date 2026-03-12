@@ -303,6 +303,8 @@ const state = {
     showHidden: true,
     guides: null,
     photo: null,
+    analysisReady: false,
+    placementKind: null,
     autoCorrecting: false,
     interaction: null,
     nextShapeId: 1,
@@ -1483,6 +1485,181 @@ function samplePhotoDarkness(point) {
   return photo.analysis.darkness[y * photo.analysis.width + x];
 }
 
+function sampleAnalysisDarkness(analysis, point) {
+  const x = clamp(Math.round(point.x), 0, analysis.width - 1);
+  const y = clamp(Math.round(point.y), 0, analysis.height - 1);
+  return analysis.darkness[y * analysis.width + x];
+}
+
+function scoreAnalysisLine(analysis, start, end, weight = 1) {
+  const length = distance2(start, end);
+
+  if (length < 6) {
+    return 0;
+  }
+
+  const sampleCount = clamp(Math.ceil(length / 8), 8, 72);
+  const normal = {
+    x: -(end.y - start.y) / length,
+    y: (end.x - start.x) / length,
+  };
+  let total = 0;
+
+  for (let index = 0; index <= sampleCount; index += 1) {
+    const t = index / sampleCount;
+    const point = lerpPoint(start, end, t);
+    let best = 0;
+
+    for (const offset of [0, 1, -1, 2, -2]) {
+      best = Math.max(
+        best,
+        sampleAnalysisDarkness(analysis, {
+          x: point.x + normal.x * offset,
+          y: point.y + normal.y * offset,
+        }),
+      );
+    }
+
+    total += best;
+  }
+
+  return (total / (sampleCount + 1)) * weight;
+}
+
+function mapAnalysisPointToCanvas(point) {
+  const layout = getCustomPhotoLayout();
+  const analysis = state.custom.photo?.analysis;
+
+  if (!layout || !analysis) {
+    return point;
+  }
+
+  return {
+    x: layout.x + (point.x / analysis.width) * layout.width,
+    y: layout.y + (point.y / analysis.height) * layout.height,
+  };
+}
+
+function scoreAnalysisRayCandidate(analysis, vp, anchor) {
+  const clipped = clipLineToBounds(anchor, { x: anchor.x - vp.x, y: anchor.y - vp.y }, {
+    minX: 0,
+    maxX: analysis.width - 1,
+    minY: 0,
+    maxY: analysis.height - 1,
+  });
+
+  if (!clipped) {
+    return 0;
+  }
+
+  return scoreAnalysisLine(analysis, clipped[0], clipped[1]);
+}
+
+function detectAnalysisHorizon(analysis) {
+  let best = {
+    y: analysis.height * 0.42,
+    score: -Infinity,
+  };
+
+  for (let y = Math.round(analysis.height * 0.16); y <= Math.round(analysis.height * 0.74); y += 2) {
+    const score = scoreAnalysisLine(
+      analysis,
+      { x: 0, y },
+      { x: analysis.width - 1, y },
+      1.25,
+    );
+
+    if (score > best.score) {
+      best = { y, score };
+    }
+  }
+
+  return best;
+}
+
+function detectVanishingCandidate(analysis, horizonY, side) {
+  const width = analysis.width;
+  const height = analysis.height;
+  const anchorsX =
+    side === "left"
+      ? [0.14, 0.26, 0.38, 0.5, 0.62]
+      : side === "right"
+        ? [0.38, 0.5, 0.62, 0.74, 0.86]
+        : [0.22, 0.34, 0.46, 0.58, 0.7, 0.82];
+  const anchorsY = [0.32, 0.4, 0.48, 0.56, 0.64, 0.72, 0.8];
+  const minX = side === "left" ? -width * 1.8 : side === "right" ? width * 0.85 : width * 0.18;
+  const maxX = side === "left" ? width * 0.15 : side === "right" ? width * 2.6 : width * 0.82;
+  const step = Math.max(8, Math.round((maxX - minX) / 120));
+  let best = {
+    x: side === "left" ? -width * 0.9 : side === "right" ? width * 1.9 : width * 0.5,
+    score: -Infinity,
+  };
+
+  for (let candidateX = minX; candidateX <= maxX; candidateX += step) {
+    const vp = { x: candidateX, y: horizonY };
+    const scores = [];
+
+    for (const yRatio of anchorsY) {
+      for (const xRatio of anchorsX) {
+        const anchor = {
+          x: width * xRatio,
+          y: height * yRatio,
+        };
+        const angle = Math.abs(Math.atan2(anchor.y - horizonY, anchor.x - candidateX));
+
+        if (angle < 0.1) {
+          continue;
+        }
+
+        scores.push(scoreAnalysisRayCandidate(analysis, vp, anchor));
+      }
+    }
+
+    scores.sort((left, right) => right - left);
+    const score = scores.slice(0, 12).reduce((sum, value) => sum + value, 0);
+
+    if (score > best.score) {
+      best = { x: candidateX, score };
+    }
+  }
+
+  return best;
+}
+
+function analyzePhotoPerspective() {
+  const analysis = state.custom.photo?.analysis;
+
+  if (!analysis) {
+    return null;
+  }
+
+  const horizon = detectAnalysisHorizon(analysis);
+  const left = detectVanishingCandidate(analysis, horizon.y, "left");
+  const right = detectVanishingCandidate(analysis, horizon.y, "right");
+  const center = detectVanishingCandidate(analysis, horizon.y, "center");
+  const twoPointStrength = left.score + right.score;
+  const onePointStrength = center.score * 1.2;
+  const mode = twoPointStrength > onePointStrength ? "two" : "one";
+
+  if (mode === "one") {
+    return {
+      mode,
+      horizonY: horizon.y,
+      vp1: { x: center.x, y: horizon.y },
+      vp2: { x: right.x, y: horizon.y },
+      vp3: { x: analysis.width * 0.5, y: analysis.height * 1.1 },
+    };
+  }
+
+  return {
+    mode,
+    horizonY: horizon.y,
+    vp1: { x: left.x, y: horizon.y },
+    vp2: { x: right.x, y: horizon.y },
+    vp3: { x: analysis.width * 0.5, y: analysis.height * 1.1 },
+  };
+}
+
 function scoreLineAgainstPhoto(start, end, weight = 1) {
   const length = distance2(start, end);
 
@@ -1597,7 +1774,106 @@ function adjustCustomShape(shape, key, delta) {
   }
 }
 
-function scoreBoxShapeAgainstPhoto(shape, baseline) {
+function optimizeBoxShapeAgainstPhoto(seedShape, focusPoint = null) {
+  const baseline = cloneCustomShape(seedShape);
+  let candidate = cloneCustomShape(seedShape);
+  let bestScore = scoreBoxShapeAgainstPhoto(candidate, baseline, focusPoint);
+  const parameters = getAutoCorrectParameters(candidate).map((parameter) => ({ ...parameter }));
+
+  for (let round = 0; round < 6; round += 1) {
+    let improved = true;
+
+    while (improved) {
+      improved = false;
+
+      for (const parameter of parameters) {
+        for (const direction of [-1, 1]) {
+          const testShape = cloneCustomShape(candidate);
+          adjustCustomShape(testShape, parameter.key, parameter.step * direction);
+          normalizeCustomShape(testShape);
+          const score = scoreBoxShapeAgainstPhoto(testShape, baseline, focusPoint);
+
+          if (score > bestScore) {
+            bestScore = score;
+            candidate = testShape;
+            improved = true;
+          }
+        }
+      }
+    }
+
+    for (const parameter of parameters) {
+      parameter.step *= 0.6;
+    }
+  }
+
+  return {
+    shape: candidate,
+    score: bestScore,
+  };
+}
+
+function createAnalyzedShapeSeed(kind, point, offset) {
+  const sign = getCustomVerticalSign();
+  const mode = state.custom.perspectiveMode;
+  const baseWidth = kind === "cube" ? 138 : 168;
+  const baseHeight = kind === "cube" ? 138 : 112;
+  const origin =
+    mode === "one"
+      ? {
+          x: point.x - baseWidth * 0.36 + offset.x,
+          y: point.y - baseHeight * 0.34 + offset.y,
+        }
+      : {
+          x: point.x - 10 + offset.x,
+          y: point.y - baseHeight * 0.46 + offset.y,
+        };
+
+  return normalizeCustomShape({
+    id: 0,
+    kind,
+    origin,
+    width: baseWidth,
+    height: baseHeight,
+    verticalSign: sign,
+    depthT: kind === "cube" ? 0.24 : 0.32,
+    xT: kind === "cube" ? 0.22 : 0.29,
+    zT: kind === "cube" ? 0.22 : 0.31,
+    yT: kind === "cube" ? 0.22 : 0.28,
+  });
+}
+
+function fitAnalyzedShapeAtPoint(kind, point) {
+  const seedOffsets = [
+    { x: -56, y: -34 },
+    { x: 0, y: -34 },
+    { x: 56, y: -34 },
+    { x: -28, y: 8 },
+    { x: 28, y: 8 },
+    { x: 0, y: 28 },
+  ];
+  let best = null;
+
+  for (const offset of seedOffsets) {
+    const seed = createAnalyzedShapeSeed(kind, point, offset);
+    const optimized = optimizeBoxShapeAgainstPhoto(seed, point);
+
+    if (!best || optimized.score > best.score) {
+      best = optimized;
+    }
+  }
+
+  if (!best) {
+    return null;
+  }
+
+  const shape = best.shape;
+  shape.id = state.custom.nextShapeId;
+  state.custom.nextShapeId += 1;
+  return shape;
+}
+
+function scoreBoxShapeAgainstPhoto(shape, baseline, focusPoint = null) {
   const geometry = getCustomShapeGeometry(shape);
   const { visibleEdges, hiddenEdges } = getCustomBoxSegments(geometry);
   let score = 0;
@@ -1621,6 +1897,25 @@ function scoreBoxShapeAgainstPhoto(shape, baseline) {
     Math.abs(shape.xT - baseline.xT) +
     Math.abs(shape.zT - baseline.zT) +
     Math.abs(shape.yT - baseline.yT);
+
+  if (focusPoint) {
+    const bounds = getCustomShapeBounds(geometry);
+    const center = {
+      x: (bounds.minX + bounds.maxX) / 2,
+      y: (bounds.minY + bounds.maxY) / 2,
+    };
+
+    score -= distance2(center, focusPoint) / 180;
+
+    if (
+      focusPoint.x >= bounds.minX &&
+      focusPoint.x <= bounds.maxX &&
+      focusPoint.y >= bounds.minY &&
+      focusPoint.y <= bounds.maxY
+    ) {
+      score += 0.7;
+    }
+  }
 
   return score - (dx + dy + dw + dh) * 0.34 - dt * 1.1;
 }
@@ -1886,6 +2181,10 @@ function formatCustomStatus() {
     fragments.push("photo loaded");
   }
 
+  if (state.custom.analysisReady) {
+    fragments.push("analysis ready");
+  }
+
   if (state.custom.showHidden) {
     fragments.push("draw-through");
   }
@@ -1909,7 +2208,13 @@ function renderCustom() {
     ctx.fillStyle = getCustomPalette().guideStrong;
     ctx.font = '700 18px "Avenir Next", "Segoe UI", sans-serif';
     ctx.textAlign = "center";
-    ctx.fillText("Add a cube, box, or cylinder and drag the guides into place.", state.view.width / 2, state.view.height / 2);
+    ctx.fillText(
+      state.custom.analysisReady
+        ? "Choose Add Cube or Add Box, then tap the drawing you want corrected."
+        : "Add a cube, box, or cylinder and drag the guides into place.",
+      state.view.width / 2,
+      state.view.height / 2,
+    );
     ctx.restore();
   }
 
@@ -2275,6 +2580,12 @@ function syncCustomControls() {
     button.classList.toggle("button-primary", active);
   }
 
+  for (const button of ui.customAddButtons) {
+    const active = state.custom.placementKind === button.dataset.customAdd;
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("button-primary", active);
+  }
+
   for (const button of ui.customToggleButtons) {
     const active = button.dataset.customToggle === "hidden" ? state.custom.showHidden : false;
     button.setAttribute("aria-pressed", String(active));
@@ -2291,10 +2602,16 @@ function syncCustomInfo() {
   const selected = getCustomSelectedShape();
   ui.customGuide.textContent = formatCustomMode(state.custom.perspectiveMode);
   ui.customCount.textContent = String(state.custom.shapes.length);
-  ui.customSelection.textContent = selected ? formatKind(selected.kind) : "None";
+  ui.customSelection.textContent = state.custom.placementKind
+    ? `Tap ${formatKind(state.custom.placementKind).toLowerCase()}`
+    : selected
+      ? formatKind(selected.kind)
+      : "None";
   ui.stageLabel.textContent = "Make Your Own";
   ui.stageTitle.textContent = state.custom.photo?.image
-    ? "Photo overlay construction"
+    ? state.custom.analysisReady
+      ? "Tap a form to place a correction"
+      : "Photo overlay construction"
     : "Manual vanishing-point setup";
   ui.status.textContent = formatStatus();
 }
@@ -3253,11 +3570,34 @@ function clearCustomPhoto() {
   }
 
   state.custom.photo = null;
+  state.custom.analysisReady = false;
+  state.custom.placementKind = null;
 
   if (ui.customPhotoInput) {
     ui.customPhotoInput.value = "";
   }
 
+  requestRender();
+}
+
+function analyzeCustomPhoto() {
+  const result = analyzePhotoPerspective();
+
+  if (!result) {
+    return;
+  }
+
+  state.custom.perspectiveMode = result.mode;
+  state.custom.guides = {
+    horizonY: mapAnalysisPointToCanvas({ x: 0, y: result.horizonY }).y,
+    vp1: mapAnalysisPointToCanvas(result.vp1),
+    vp2: mapAnalysisPointToCanvas(result.vp2),
+    vp3: mapAnalysisPointToCanvas(result.vp3),
+  };
+  state.custom.guides.vp1.y = state.custom.guides.horizonY;
+  state.custom.guides.vp2.y = state.custom.guides.horizonY;
+  state.custom.analysisReady = true;
+  state.custom.placementKind = "box";
   requestRender();
 }
 
@@ -3275,41 +3615,9 @@ async function autoCorrectSelectedCustomShape() {
   state.custom.autoCorrecting = true;
   syncUi();
   await new Promise((resolve) => requestAnimationFrame(resolve));
-
-  const baseline = cloneCustomShape(selectedShape);
-  let candidate = cloneCustomShape(selectedShape);
-  let bestScore = scoreBoxShapeAgainstPhoto(candidate, baseline);
-  const parameters = getAutoCorrectParameters(candidate).map((parameter) => ({ ...parameter }));
-
-  for (let round = 0; round < 6; round += 1) {
-    let improved = true;
-
-    while (improved) {
-      improved = false;
-
-      for (const parameter of parameters) {
-        for (const direction of [-1, 1]) {
-          const testShape = cloneCustomShape(candidate);
-          adjustCustomShape(testShape, parameter.key, parameter.step * direction);
-          normalizeCustomShape(testShape);
-          const score = scoreBoxShapeAgainstPhoto(testShape, baseline);
-
-          if (score > bestScore) {
-            bestScore = score;
-            candidate = testShape;
-            improved = true;
-          }
-        }
-      }
-    }
-
-    for (const parameter of parameters) {
-      parameter.step *= 0.6;
-    }
-  }
-
-  Object.assign(selectedShape, candidate);
-  selectedShape.origin = { ...candidate.origin };
+  const optimized = optimizeBoxShapeAgainstPhoto(selectedShape);
+  Object.assign(selectedShape, optimized.shape);
+  selectedShape.origin = { ...optimized.shape.origin };
   state.custom.autoCorrecting = false;
   requestRender();
 }
@@ -3345,6 +3653,8 @@ async function handleCustomPhotoChange(event) {
       objectUrl,
       analysis: buildPhotoAnalysis(image),
     };
+    state.custom.analysisReady = false;
+    state.custom.placementKind = null;
 
     switchMode("custom");
   } catch (error) {
@@ -3458,6 +3768,19 @@ function handleCustomPointerDown(event) {
   }
 
   const point = getPointFromEvent(event);
+
+  if (state.custom.analysisReady && state.custom.placementKind && state.custom.photo?.analysis) {
+    const fittedShape = fitAnalyzedShapeAtPoint(state.custom.placementKind, point);
+
+    if (fittedShape) {
+      state.custom.shapes.push(fittedShape);
+      state.custom.selectedShapeId = fittedShape.id;
+    }
+
+    state.custom.placementKind = null;
+    requestRender();
+    return;
+  }
 
   for (let index = state.custom.shapes.length - 1; index >= 0; index -= 1) {
     const shape = state.custom.shapes[index];
@@ -3677,7 +4000,14 @@ function handlePerspectiveClick(event) {
 
   if (customAddButton) {
     switchMode("custom");
-    createCustomShape(customAddButton.dataset.customAdd);
+
+    if (state.custom.analysisReady && state.custom.photo?.analysis) {
+      state.custom.placementKind = customAddButton.dataset.customAdd;
+      requestRender();
+    } else {
+      createCustomShape(customAddButton.dataset.customAdd);
+    }
+
     return;
   }
 
@@ -3692,8 +4022,8 @@ function handlePerspectiveClick(event) {
   if (customActionButton) {
     switchMode("custom");
 
-    if (customActionButton.dataset.customAction === "auto-correct") {
-      autoCorrectSelectedCustomShape();
+    if (customActionButton.dataset.customAction === "analyze-photo") {
+      analyzeCustomPhoto();
     } else if (customActionButton.dataset.customAction === "center-guides") {
       resetCustomGuides();
     } else if (customActionButton.dataset.customAction === "delete-shape") {
