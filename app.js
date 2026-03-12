@@ -1241,14 +1241,34 @@ function scaleCustomLayout(previousView, nextView) {
   for (const shape of state.custom.shapes) {
     shape.origin.x *= scaleX;
     shape.origin.y *= scaleY;
-    shape.width *= scaleX;
-    shape.height *= scaleY;
+
+    if (shape.kind === "cube") {
+      shape.size = (shape.size || getCustomCubeBaseSize(shape)) * averageNumbers([scaleX, scaleY]);
+    } else {
+      shape.width *= scaleX;
+      shape.height *= scaleY;
+    }
+
+    normalizeCustomShape(shape);
   }
 }
 
 function resetCustomGuides() {
   state.custom.guides = buildDefaultCustomGuides();
+
+  for (const shape of state.custom.shapes) {
+    normalizeCustomShape(shape);
+  }
+
   requestRender();
+}
+
+function averageNumbers(values) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function getCustomSelectedShape() {
@@ -1290,6 +1310,7 @@ function createCustomShape(kind) {
     origin,
     width,
     height,
+    size: kind === "cube" ? width : undefined,
     verticalSign: sign,
     depthT: kind === "cube" ? 0.24 : 0.3,
     xT: kind === "cube" ? 0.22 : 0.27,
@@ -1298,24 +1319,90 @@ function createCustomShape(kind) {
   };
 
   state.custom.nextShapeId += 1;
-  state.custom.shapes.push(shape);
+  state.custom.shapes.push(normalizeCustomShape(shape));
   state.custom.selectedShapeId = shape.id;
   requestRender();
+}
+
+function getCustomCubeBaseSize(shape) {
+  const guides = state.custom.guides || buildDefaultCustomGuides();
+  const mode = state.custom.perspectiveMode;
+  const origin = shape.origin;
+
+  if (Number.isFinite(shape.size)) {
+    return shape.size;
+  }
+
+  if (mode === "one") {
+    return averageNumbers([
+      shape.width || 160,
+      shape.height || 160,
+      (shape.depthT || 0.24) * distance2(origin, guides.vp1),
+    ]);
+  }
+
+  if (mode === "two") {
+    return averageNumbers([
+      shape.height || 160,
+      (shape.xT || 0.22) * distance2(origin, guides.vp1),
+      (shape.zT || 0.22) * distance2(origin, guides.vp2),
+    ]);
+  }
+
+  return averageNumbers([
+    (shape.xT || 0.22) * distance2(origin, guides.vp1),
+    (shape.yT || 0.22) * distance2(origin, guides.vp3),
+    (shape.zT || 0.22) * distance2(origin, guides.vp2),
+  ]);
+}
+
+function getCustomCubeMetrics(shape) {
+  const guides = state.custom.guides || buildDefaultCustomGuides();
+  const mode = state.custom.perspectiveMode;
+  const origin = shape.origin;
+  const xDistance = Math.max(distance2(origin, guides.vp1), 1);
+  const zDistance = Math.max(distance2(origin, guides.vp2), 1);
+  const yDistance = Math.max(distance2(origin, guides.vp3), 1);
+  const maxSize =
+    mode === "one"
+      ? Math.min(state.view.width * 0.45, state.view.height * 0.58, xDistance * 0.84)
+      : mode === "two"
+        ? Math.min(state.view.height * 0.58, xDistance * 0.82, zDistance * 0.82)
+        : Math.min(xDistance * 0.82, yDistance * 0.82, zDistance * 0.82);
+  const clampedMax = Math.max(32, maxSize);
+  const size = clamp(getCustomCubeBaseSize(shape), Math.min(48, clampedMax), clampedMax);
+
+  return {
+    size,
+    width: size,
+    height: size,
+    depthT: clamp(size / xDistance, 0.08, 0.84),
+    xT: clamp(size / xDistance, 0.08, 0.82),
+    yT: clamp(size / yDistance, 0.08, 0.82),
+    zT: clamp(size / zDistance, 0.08, 0.82),
+  };
 }
 
 function getCustomShapeGeometry(shape) {
   ensureCustomSetup();
   const { perspectiveMode, guides } = state.custom;
   const origin = { ...shape.origin };
+  const cubeMetrics = shape.kind === "cube" ? getCustomCubeMetrics(shape) : null;
+  const width = cubeMetrics ? cubeMetrics.width : shape.width;
+  const height = cubeMetrics ? cubeMetrics.height : shape.height;
+  const depthT = cubeMetrics ? cubeMetrics.depthT : shape.depthT;
+  const xT = cubeMetrics ? cubeMetrics.xT : shape.xT;
+  const yT = cubeMetrics ? cubeMetrics.yT : shape.yT;
+  const zT = cubeMetrics ? cubeMetrics.zT : shape.zT;
 
   if (perspectiveMode === "one") {
-    const xHandle = { x: origin.x + shape.width, y: origin.y };
-    const yHandle = { x: origin.x, y: origin.y + shape.height * shape.verticalSign };
+    const xHandle = { x: origin.x + width, y: origin.y };
+    const yHandle = { x: origin.x, y: origin.y + height * shape.verticalSign };
     const xyHandle = { x: xHandle.x, y: yHandle.y };
-    const zHandle = lerpPoint(origin, guides.vp1, shape.depthT);
-    const xzHandle = lerpPoint(xHandle, guides.vp1, shape.depthT);
-    const yzHandle = lerpPoint(yHandle, guides.vp1, shape.depthT);
-    const xyzHandle = lerpPoint(xyHandle, guides.vp1, shape.depthT);
+    const zHandle = lerpPoint(origin, guides.vp1, depthT);
+    const xzHandle = lerpPoint(xHandle, guides.vp1, depthT);
+    const yzHandle = lerpPoint(yHandle, guides.vp1, depthT);
+    const xyzHandle = lerpPoint(xyHandle, guides.vp1, depthT);
 
     return {
       vertices: [origin, xHandle, yHandle, xyHandle, zHandle, xzHandle, yzHandle, xyzHandle],
@@ -1329,12 +1416,12 @@ function getCustomShapeGeometry(shape) {
   }
 
   if (perspectiveMode === "two") {
-    const xHandle = lerpPoint(origin, guides.vp1, shape.xT);
-    const zHandle = lerpPoint(origin, guides.vp2, shape.zT);
-    const yHandle = { x: origin.x, y: origin.y + shape.height * shape.verticalSign };
+    const xHandle = lerpPoint(origin, guides.vp1, xT);
+    const zHandle = lerpPoint(origin, guides.vp2, zT);
+    const yHandle = { x: origin.x, y: origin.y + height * shape.verticalSign };
     const xzHandle =
       getLineIntersection(xHandle, guides.vp2, zHandle, guides.vp1) ||
-      add2(lerpPoint(origin, guides.vp1, shape.xT), subtract2(zHandle, origin));
+      add2(lerpPoint(origin, guides.vp1, xT), subtract2(zHandle, origin));
     const xyHandle =
       getVerticalLineIntersection(xHandle, yHandle, guides.vp1) ||
       getLineIntersection(yHandle, guides.vp1, xHandle, { x: xHandle.x, y: xHandle.y + 1 }) ||
@@ -1360,9 +1447,9 @@ function getCustomShapeGeometry(shape) {
     };
   }
 
-  const xHandle = lerpPoint(origin, guides.vp1, shape.xT);
-  const yHandle = lerpPoint(origin, guides.vp3, shape.yT);
-  const zHandle = lerpPoint(origin, guides.vp2, shape.zT);
+  const xHandle = lerpPoint(origin, guides.vp1, xT);
+  const yHandle = lerpPoint(origin, guides.vp3, yT);
+  const zHandle = lerpPoint(origin, guides.vp2, zT);
   const xyHandle =
     getLineIntersection(xHandle, guides.vp3, yHandle, guides.vp1) ||
     lerpPoint(xHandle, yHandle, 0.5);
@@ -1990,15 +2077,34 @@ function getCustomBoxSegments(geometry) {
 }
 
 function cloneCustomShape(shape) {
-  return {
+  const clone = {
     ...shape,
     origin: { ...shape.origin },
   };
+
+  if (clone.kind === "cube") {
+    normalizeCustomShape(clone);
+  }
+
+  return clone;
 }
 
 function normalizeCustomShape(shape) {
   shape.origin.x = clamp(shape.origin.x, 28, state.view.width - 28);
   shape.origin.y = clamp(shape.origin.y, 28, state.view.height - 28);
+
+  if (shape.kind === "cube") {
+    const metrics = getCustomCubeMetrics(shape);
+    shape.size = metrics.size;
+    shape.width = metrics.width;
+    shape.height = metrics.height;
+    shape.depthT = metrics.depthT;
+    shape.xT = metrics.xT;
+    shape.zT = metrics.zT;
+    shape.yT = metrics.yT;
+    return shape;
+  }
+
   shape.width = clamp(shape.width, 48, state.view.width * 0.55);
   shape.height = clamp(shape.height, 48, state.view.height * 0.62);
   shape.depthT = clamp(shape.depthT, 0.08, 0.84);
@@ -2016,12 +2122,17 @@ function scaleCustomShape(shape, factor) {
     y: (beforeBounds.minY + beforeBounds.maxY) / 2,
   };
 
-  shape.width *= factor;
-  shape.height *= factor;
-  shape.depthT *= factor;
-  shape.xT *= factor;
-  shape.zT *= factor;
-  shape.yT *= factor;
+  if (shape.kind === "cube") {
+    shape.size = (shape.size || getCustomCubeBaseSize(shape)) * factor;
+  } else {
+    shape.width *= factor;
+    shape.height *= factor;
+    shape.depthT *= factor;
+    shape.xT *= factor;
+    shape.zT *= factor;
+    shape.yT *= factor;
+  }
+
   normalizeCustomShape(shape);
 
   const afterGeometry = getCustomShapeGeometry(shape);
@@ -2040,6 +2151,14 @@ function scaleCustomShape(shape, factor) {
 }
 
 function getAutoCorrectParameters(shape) {
+  if (shape.kind === "cube") {
+    return [
+      { key: "origin.x", step: 18 },
+      { key: "origin.y", step: 18 },
+      { key: "size", step: 18 },
+    ];
+  }
+
   if (state.custom.perspectiveMode === "one") {
     return [
       { key: "origin.x", step: 18 },
@@ -2140,6 +2259,7 @@ function createAnalyzedShapeSeed(kind, point, offset) {
     origin,
     width: baseWidth,
     height: baseHeight,
+    size: kind === "cube" ? baseWidth : undefined,
     verticalSign: sign,
     depthT: kind === "cube" ? 0.24 : 0.32,
     xT: kind === "cube" ? 0.22 : 0.29,
@@ -4116,6 +4236,11 @@ function setGestureSource(source) {
 function setCustomPerspectiveMode(mode) {
   state.custom.perspectiveMode = mode;
   ensureCustomSetup();
+
+  for (const shape of state.custom.shapes) {
+    normalizeCustomShape(shape);
+  }
+
   requestRender();
 }
 
@@ -4313,6 +4438,42 @@ function updateCustomShapeFromHandle(shape, handle, point) {
     return;
   }
 
+  if (shape.kind === "cube") {
+    if (state.custom.perspectiveMode === "one") {
+      if (handle === "x") {
+        shape.size = point.x - shape.origin.x;
+      } else if (handle === "y") {
+        shape.size = (point.y - shape.origin.y) / shape.verticalSign;
+      } else if (handle === "z") {
+        shape.size = getRayParameter(shape.origin, guides.vp1, point) * distance2(shape.origin, guides.vp1);
+      }
+
+      return;
+    }
+
+    if (state.custom.perspectiveMode === "two") {
+      if (handle === "x") {
+        shape.size = getRayParameter(shape.origin, guides.vp1, point) * distance2(shape.origin, guides.vp1);
+      } else if (handle === "z") {
+        shape.size = getRayParameter(shape.origin, guides.vp2, point) * distance2(shape.origin, guides.vp2);
+      } else if (handle === "y") {
+        shape.size = (point.y - shape.origin.y) / shape.verticalSign;
+      }
+
+      return;
+    }
+
+    if (handle === "x") {
+      shape.size = getRayParameter(shape.origin, guides.vp1, point) * distance2(shape.origin, guides.vp1);
+    } else if (handle === "z") {
+      shape.size = getRayParameter(shape.origin, guides.vp2, point) * distance2(shape.origin, guides.vp2);
+    } else if (handle === "y") {
+      shape.size = getRayParameter(shape.origin, guides.vp3, point) * distance2(shape.origin, guides.vp3);
+    }
+
+    return;
+  }
+
   if (state.custom.perspectiveMode === "one") {
     if (handle === "x") {
       shape.width = clamp(point.x - shape.origin.x, 48, state.view.width * 0.45);
@@ -4454,6 +4615,10 @@ function handleCustomPointerMove(event) {
       guides.vp3.y = clamp(guides.vp3.y, 24, state.view.height - 24);
     }
 
+    for (const shape of state.custom.shapes) {
+      normalizeCustomShape(shape);
+    }
+
     requestRender();
     return;
   }
@@ -4474,6 +4639,7 @@ function handleCustomPointerMove(event) {
     updateCustomShapeFromHandle(shape, interaction.handle, point);
   }
 
+  normalizeCustomShape(shape);
   requestRender();
 }
 
