@@ -303,6 +303,7 @@ const state = {
     showHidden: true,
     guides: null,
     photo: null,
+    autoCorrecting: false,
     interaction: null,
     nextShapeId: 1,
   },
@@ -1417,6 +1418,213 @@ function getProjectedEllipsePoints(quad, segmentCount = 60) {
   return points;
 }
 
+function getCustomPhotoLayout() {
+  if (!state.custom.photo?.image) {
+    return null;
+  }
+
+  const { image } = state.custom.photo;
+  const scale = Math.min(state.view.width / image.naturalWidth, state.view.height / image.naturalHeight);
+  const width = image.naturalWidth * scale;
+  const height = image.naturalHeight * scale;
+
+  return {
+    x: (state.view.width - width) / 2,
+    y: (state.view.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+function buildPhotoAnalysis(image) {
+  const maxSize = 960;
+  const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const analysisCanvas = document.createElement("canvas");
+  analysisCanvas.width = width;
+  analysisCanvas.height = height;
+  const analysisCtx = analysisCanvas.getContext("2d", { willReadFrequently: true });
+  analysisCtx.drawImage(image, 0, 0, width, height);
+  const imageData = analysisCtx.getImageData(0, 0, width, height).data;
+  const darkness = new Float32Array(width * height);
+
+  for (let index = 0; index < width * height; index += 1) {
+    const pixelIndex = index * 4;
+    const value =
+      (0.299 * imageData[pixelIndex] +
+        0.587 * imageData[pixelIndex + 1] +
+        0.114 * imageData[pixelIndex + 2]) /
+      255;
+    const ink = clamp((0.92 - value) / 0.92, 0, 1);
+    darkness[index] = ink * ink;
+  }
+
+  return { width, height, darkness };
+}
+
+function samplePhotoDarkness(point) {
+  const photo = state.custom.photo;
+  const layout = getCustomPhotoLayout();
+
+  if (!photo?.analysis || !layout) {
+    return 0;
+  }
+
+  const u = (point.x - layout.x) / layout.width;
+  const v = (point.y - layout.y) / layout.height;
+
+  if (u < 0 || u > 1 || v < 0 || v > 1) {
+    return 0;
+  }
+
+  const x = clamp(Math.round(u * (photo.analysis.width - 1)), 0, photo.analysis.width - 1);
+  const y = clamp(Math.round(v * (photo.analysis.height - 1)), 0, photo.analysis.height - 1);
+  return photo.analysis.darkness[y * photo.analysis.width + x];
+}
+
+function scoreLineAgainstPhoto(start, end, weight = 1) {
+  const length = distance2(start, end);
+
+  if (length < 6) {
+    return 0;
+  }
+
+  const sampleCount = clamp(Math.ceil(length / 10), 8, 44);
+  const normal = {
+    x: -(end.y - start.y) / length,
+    y: (end.x - start.x) / length,
+  };
+  let total = 0;
+
+  for (let index = 0; index <= sampleCount; index += 1) {
+    const t = index / sampleCount;
+    const point = lerpPoint(start, end, t);
+    let best = 0;
+
+    for (const offset of [0, 1.5, -1.5, 3, -3]) {
+      best = Math.max(
+        best,
+        samplePhotoDarkness({
+          x: point.x + normal.x * offset,
+          y: point.y + normal.y * offset,
+        }),
+      );
+    }
+
+    total += best;
+  }
+
+  return (total / (sampleCount + 1)) * weight;
+}
+
+function getCustomBoxSegments(geometry) {
+  const faceVisibility = getCustomVisibleFaces();
+  const hiddenEdges = [];
+  const visibleEdges = [];
+
+  for (const edge of edges) {
+    const [aIndex, bIndex] = edge.indices;
+    const segment = [geometry.vertices[aIndex], geometry.vertices[bIndex]];
+    const isVisible = edge.faces.some((name) => faceVisibility.get(name));
+
+    if (isVisible) {
+      visibleEdges.push(segment);
+    } else {
+      hiddenEdges.push(segment);
+    }
+  }
+
+  return { visibleEdges, hiddenEdges };
+}
+
+function cloneCustomShape(shape) {
+  return {
+    ...shape,
+    origin: { ...shape.origin },
+  };
+}
+
+function normalizeCustomShape(shape) {
+  shape.origin.x = clamp(shape.origin.x, 28, state.view.width - 28);
+  shape.origin.y = clamp(shape.origin.y, 28, state.view.height - 28);
+  shape.width = clamp(shape.width, 48, state.view.width * 0.55);
+  shape.height = clamp(shape.height, 48, state.view.height * 0.62);
+  shape.depthT = clamp(shape.depthT, 0.08, 0.84);
+  shape.xT = clamp(shape.xT, 0.08, 0.84);
+  shape.zT = clamp(shape.zT, 0.08, 0.84);
+  shape.yT = clamp(shape.yT, 0.08, 0.84);
+  return shape;
+}
+
+function getAutoCorrectParameters(shape) {
+  if (state.custom.perspectiveMode === "one") {
+    return [
+      { key: "origin.x", step: 18 },
+      { key: "origin.y", step: 18 },
+      { key: "width", step: 16 },
+      { key: "height", step: 16 },
+      { key: "depthT", step: 0.055 },
+    ];
+  }
+
+  if (state.custom.perspectiveMode === "two") {
+    return [
+      { key: "origin.x", step: 18 },
+      { key: "origin.y", step: 18 },
+      { key: "height", step: 18 },
+      { key: "xT", step: 0.05 },
+      { key: "zT", step: 0.05 },
+    ];
+  }
+
+  return [
+    { key: "origin.x", step: 18 },
+    { key: "origin.y", step: 18 },
+    { key: "xT", step: 0.05 },
+    { key: "zT", step: 0.05 },
+    { key: "yT", step: 0.05 },
+  ];
+}
+
+function adjustCustomShape(shape, key, delta) {
+  if (key === "origin.x") {
+    shape.origin.x += delta;
+  } else if (key === "origin.y") {
+    shape.origin.y += delta;
+  } else {
+    shape[key] += delta;
+  }
+}
+
+function scoreBoxShapeAgainstPhoto(shape, baseline) {
+  const geometry = getCustomShapeGeometry(shape);
+  const { visibleEdges, hiddenEdges } = getCustomBoxSegments(geometry);
+  let score = 0;
+
+  for (const [start, end] of visibleEdges) {
+    score += scoreLineAgainstPhoto(start, end, 1.2);
+  }
+
+  if (state.custom.showHidden) {
+    for (const [start, end] of hiddenEdges) {
+      score += scoreLineAgainstPhoto(start, end, 0.55);
+    }
+  }
+
+  const dx = Math.abs(shape.origin.x - baseline.origin.x) / 120;
+  const dy = Math.abs(shape.origin.y - baseline.origin.y) / 120;
+  const dw = Math.abs(shape.width - baseline.width) / 120;
+  const dh = Math.abs(shape.height - baseline.height) / 120;
+  const dt =
+    Math.abs(shape.depthT - baseline.depthT) +
+    Math.abs(shape.xT - baseline.xT) +
+    Math.abs(shape.zT - baseline.zT) +
+    Math.abs(shape.yT - baseline.yT);
+
+  return score - (dx + dy + dw + dh) * 0.34 - dt * 1.1;
+}
+
 function drawPolyline(points, lineWidth, strokeStyle, dashPattern = []) {
   if (points.length < 2) {
     return;
@@ -1436,22 +1644,19 @@ function drawPolyline(points, lineWidth, strokeStyle, dashPattern = []) {
 }
 
 function drawCustomPhoto() {
-  if (!state.custom.photo?.image) {
+  const layout = getCustomPhotoLayout();
+
+  if (!state.custom.photo?.image || !layout) {
     return;
   }
 
   const { image } = state.custom.photo;
-  const scale = Math.min(state.view.width / image.naturalWidth, state.view.height / image.naturalHeight);
-  const width = image.naturalWidth * scale;
-  const height = image.naturalHeight * scale;
-  const x = (state.view.width - width) / 2;
-  const y = (state.view.height - height) / 2;
 
   ctx.save();
   ctx.globalAlpha = 0.94;
-  ctx.drawImage(image, x, y, width, height);
+  ctx.drawImage(image, layout.x, layout.y, layout.width, layout.height);
   ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-  ctx.fillRect(x, y, width, height);
+  ctx.fillRect(layout.x, layout.y, layout.width, layout.height);
   ctx.restore();
 }
 
@@ -1666,6 +1871,10 @@ function drawCustomShapeHandles(geometry) {
 
 function formatCustomStatus() {
   const fragments = [formatCustomMode(state.custom.perspectiveMode)];
+
+  if (state.custom.autoCorrecting) {
+    fragments.unshift("analyzing");
+  }
 
   if (state.custom.shapes.length > 0) {
     fragments.push(`${state.custom.shapes.length} shape${state.custom.shapes.length === 1 ? "" : "s"}`);
@@ -3052,6 +3261,59 @@ function clearCustomPhoto() {
   requestRender();
 }
 
+async function autoCorrectSelectedCustomShape() {
+  const selectedShape = getCustomSelectedShape();
+
+  if (!selectedShape || !state.custom.photo?.analysis || state.custom.autoCorrecting) {
+    return;
+  }
+
+  if (selectedShape.kind === "cylinder") {
+    return;
+  }
+
+  state.custom.autoCorrecting = true;
+  syncUi();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+
+  const baseline = cloneCustomShape(selectedShape);
+  let candidate = cloneCustomShape(selectedShape);
+  let bestScore = scoreBoxShapeAgainstPhoto(candidate, baseline);
+  const parameters = getAutoCorrectParameters(candidate).map((parameter) => ({ ...parameter }));
+
+  for (let round = 0; round < 6; round += 1) {
+    let improved = true;
+
+    while (improved) {
+      improved = false;
+
+      for (const parameter of parameters) {
+        for (const direction of [-1, 1]) {
+          const testShape = cloneCustomShape(candidate);
+          adjustCustomShape(testShape, parameter.key, parameter.step * direction);
+          normalizeCustomShape(testShape);
+          const score = scoreBoxShapeAgainstPhoto(testShape, baseline);
+
+          if (score > bestScore) {
+            bestScore = score;
+            candidate = testShape;
+            improved = true;
+          }
+        }
+      }
+    }
+
+    for (const parameter of parameters) {
+      parameter.step *= 0.6;
+    }
+  }
+
+  Object.assign(selectedShape, candidate);
+  selectedShape.origin = { ...candidate.origin };
+  state.custom.autoCorrecting = false;
+  requestRender();
+}
+
 function loadImageFromObjectUrl(objectUrl) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -3081,6 +3343,7 @@ async function handleCustomPhotoChange(event) {
       image,
       name: file.name,
       objectUrl,
+      analysis: buildPhotoAnalysis(image),
     };
 
     switchMode("custom");
@@ -3429,7 +3692,9 @@ function handlePerspectiveClick(event) {
   if (customActionButton) {
     switchMode("custom");
 
-    if (customActionButton.dataset.customAction === "center-guides") {
+    if (customActionButton.dataset.customAction === "auto-correct") {
+      autoCorrectSelectedCustomShape();
+    } else if (customActionButton.dataset.customAction === "center-guides") {
       resetCustomGuides();
     } else if (customActionButton.dataset.customAction === "delete-shape") {
       removeSelectedCustomShape();
