@@ -57,8 +57,8 @@ const faceQuadIndices = {
   far: [4, 5, 7, 6],
   left: [0, 4, 6, 2],
   right: [1, 5, 7, 3],
-  top: [0, 1, 5, 4],
-  bottom: [2, 3, 7, 6],
+  top: [2, 3, 7, 6],
+  bottom: [0, 1, 5, 4],
 };
 
 const guideEdgePairs = [
@@ -85,7 +85,7 @@ const cylinderGuidePairs = [
 const unitCircleConic = [
   [1, 0, -0.5],
   [0, 1, -0.5],
-  [-0.5, -0.5, 0],
+  [-0.5, -0.5, 0.25],
 ];
 
 const gestureSearchTerms = [
@@ -1531,10 +1531,39 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
     points.push(project(0.5 + 0.5 * Math.cos(angle), 0.5 + 0.5 * Math.sin(angle)));
   }
 
+  const contourPoints = {
+    sideA: project(0, 0.5),
+    sideB: project(1, 0.5),
+    hiddenA: project(0.5, 0),
+    hiddenB: project(0.5, 1),
+  };
+  const projectedCenter = project(0.5, 0.5);
+
+  const fallbackGuide = () => {
+    const horizontalSpan = distance2(contourPoints.sideA, contourPoints.sideB);
+    const verticalSpan = distance2(contourPoints.hiddenA, contourPoints.hiddenB);
+    const majorAxis =
+      horizontalSpan >= verticalSpan
+        ? [contourPoints.sideA, contourPoints.sideB]
+        : [contourPoints.hiddenA, contourPoints.hiddenB];
+    const minorAxis =
+      horizontalSpan >= verticalSpan
+        ? [contourPoints.hiddenA, contourPoints.hiddenB]
+        : [contourPoints.sideA, contourPoints.sideB];
+
+    return {
+      points,
+      center: projectedCenter,
+      contourPoints,
+      majorAxis,
+      minorAxis,
+    };
+  };
+
   const inverse = invert3x3(homography.matrix);
 
   if (!inverse) {
-    return null;
+    return fallbackGuide();
   }
 
   const conic = symmetrize3x3(multiply3x3(transpose3x3(inverse), multiply3x3(unitCircleConic, inverse)));
@@ -1547,7 +1576,7 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
   const determinant = a * c - b * b;
 
   if (Math.abs(determinant) < 0.0000001) {
-    return null;
+    return fallbackGuide();
   }
 
   const center = {
@@ -1567,7 +1596,7 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
   let minorRadius = Math.sqrt(-centeredConstant / ((trace + root) / 2));
 
   if (!Number.isFinite(majorRadius) || !Number.isFinite(minorRadius)) {
-    return null;
+    return fallbackGuide();
   }
 
   let majorDirection = {
@@ -1587,12 +1616,7 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
   return {
     points,
     center,
-    contourPoints: {
-      sideA: project(0, 0.5),
-      sideB: project(1, 0.5),
-      hiddenA: project(0.5, 0),
-      hiddenB: project(0.5, 1),
-    },
+    contourPoints,
     majorAxis: [
       add2(center, scale2(majorDirection, -majorRadius)),
       add2(center, scale2(majorDirection, majorRadius)),
