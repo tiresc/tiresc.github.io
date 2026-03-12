@@ -52,6 +52,14 @@ const faceDefinitions = [
 ];
 
 const facesByName = new Map(faceDefinitions.map((face) => [face.name, face]));
+const faceQuadIndices = {
+  near: [0, 1, 3, 2],
+  far: [4, 5, 7, 6],
+  left: [0, 4, 6, 2],
+  right: [1, 5, 7, 3],
+  top: [0, 1, 5, 4],
+  bottom: [2, 3, 7, 6],
+};
 
 const guideEdgePairs = [
   [0, 1],
@@ -1504,8 +1512,8 @@ function symmetrize3x3(matrix) {
 }
 
 function getFaceQuad(vertices, faceName) {
-  const face = facesByName.get(faceName);
-  return face ? face.indices.map((index) => vertices[index]) : null;
+  const indices = faceQuadIndices[faceName];
+  return indices ? indices.map((index) => vertices[index]) : null;
 }
 
 function getProjectedEllipseGuide(quad, segmentCount = 72) {
@@ -1515,11 +1523,12 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
     return null;
   }
 
+  const project = homography.project.bind(homography);
   const points = [];
 
   for (let index = 0; index <= segmentCount; index += 1) {
     const angle = (index / segmentCount) * Math.PI * 2;
-    points.push(homography.project(0.5 + 0.5 * Math.cos(angle), 0.5 + 0.5 * Math.sin(angle)));
+    points.push(project(0.5 + 0.5 * Math.cos(angle), 0.5 + 0.5 * Math.sin(angle)));
   }
 
   const inverse = invert3x3(homography.matrix);
@@ -1578,6 +1587,12 @@ function getProjectedEllipseGuide(quad, segmentCount = 72) {
   return {
     points,
     center,
+    contourPoints: {
+      sideA: project(0, 0.5),
+      sideB: project(1, 0.5),
+      hiddenA: project(0.5, 0),
+      hiddenB: project(0.5, 1),
+    },
     majorAxis: [
       add2(center, scale2(majorDirection, -majorRadius)),
       add2(center, scale2(majorDirection, majorRadius)),
@@ -2196,6 +2211,27 @@ function drawCylinderGuideOverlay(vertices, faceVisibility, options) {
       drawGuidePoint(entry.guide.center, options.centerRadius, strokeStyle);
     }
 
+    drawLineSegments(
+      [
+        [faceEntries[0].guide.contourPoints.sideA, faceEntries[1].guide.contourPoints.sideA],
+        [faceEntries[0].guide.contourPoints.sideB, faceEntries[1].guide.contourPoints.sideB],
+      ],
+      options.contourWidth,
+      options.contourStroke,
+    );
+
+    if (options.showHidden) {
+      drawLineSegments(
+        [
+          [faceEntries[0].guide.contourPoints.hiddenA, faceEntries[1].guide.contourPoints.hiddenA],
+          [faceEntries[0].guide.contourPoints.hiddenB, faceEntries[1].guide.contourPoints.hiddenB],
+        ],
+        options.hiddenWidth,
+        options.hiddenStroke,
+        options.hiddenDash,
+      );
+    }
+
     if (options.showHidden || faceEntries.some((entry) => entry.visible)) {
       drawSingleLine(
         faceEntries[0].guide.center,
@@ -2312,16 +2348,18 @@ function drawCustomBox(shape, geometry) {
   if (state.custom.showCylinderGuides) {
     drawCylinderGuideOverlay(geometry.vertices, faceVisibility, {
       showHidden: state.custom.showHidden,
-      visibleStroke: palette.guideStrong,
-      hiddenStroke: palette.guide,
-      connectorStroke: palette.guideStrong,
-      ellipseWidth: Math.max(1.15, visibleWidth * 0.66),
-      hiddenWidth: Math.max(0.9, hiddenWidth * 0.82),
-      axisWidth: Math.max(0.95, visibleWidth * 0.5),
-      connectorWidth: Math.max(0.9, visibleWidth * 0.42),
-      centerRadius: Math.max(2.1, visibleWidth * 0.64),
-      hiddenDash: [8, 8],
-      connectorDash: [7, 8],
+      visibleStroke: "rgba(96, 46, 156, 0.92)",
+      hiddenStroke: "rgba(96, 46, 156, 0.38)",
+      contourStroke: "rgba(76, 28, 142, 0.96)",
+      connectorStroke: "rgba(96, 46, 156, 0.68)",
+      ellipseWidth: Math.max(1.8, visibleWidth * 0.84),
+      hiddenWidth: Math.max(1.1, hiddenWidth * 0.9),
+      axisWidth: Math.max(1.35, visibleWidth * 0.62),
+      contourWidth: Math.max(1.7, visibleWidth * 0.82),
+      connectorWidth: Math.max(1.05, visibleWidth * 0.48),
+      centerRadius: Math.max(2.8, visibleWidth * 0.78),
+      hiddenDash: [7, 7],
+      connectorDash: [6, 7],
     });
   }
 
@@ -2675,16 +2713,18 @@ function drawBox(exercise, projection) {
   if (state.perspective.showCylinderGuides) {
     drawCylinderGuideOverlay(projectedVertices, faceVisibility, {
       showHidden: state.perspective.showHidden,
-      visibleStroke: "rgba(171, 94, 37, 0.74)",
-      hiddenStroke: "rgba(171, 94, 37, 0.34)",
-      connectorStroke: "rgba(171, 94, 37, 0.48)",
-      ellipseWidth: Math.max(1.15, visibleWidth * 0.5),
-      hiddenWidth: Math.max(0.95, hiddenWidth * 0.76),
-      axisWidth: Math.max(1, visibleWidth * 0.42),
-      connectorWidth: Math.max(0.95, visibleWidth * 0.38),
-      centerRadius: Math.max(2.4, visibleWidth * 0.7),
-      hiddenDash: [8, 8],
-      connectorDash: [7, 8],
+      visibleStroke: "rgba(92, 34, 150, 0.94)",
+      hiddenStroke: "rgba(92, 34, 150, 0.36)",
+      contourStroke: "rgba(68, 18, 132, 0.98)",
+      connectorStroke: "rgba(92, 34, 150, 0.7)",
+      ellipseWidth: Math.max(1.9, visibleWidth * 0.72),
+      hiddenWidth: Math.max(1.05, hiddenWidth * 0.86),
+      axisWidth: Math.max(1.35, visibleWidth * 0.58),
+      contourWidth: Math.max(1.8, visibleWidth * 0.76),
+      connectorWidth: Math.max(1.05, visibleWidth * 0.44),
+      centerRadius: Math.max(2.9, visibleWidth * 0.78),
+      hiddenDash: [7, 7],
+      connectorDash: [6, 7],
     });
   }
 }
