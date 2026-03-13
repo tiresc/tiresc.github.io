@@ -3429,7 +3429,18 @@ function centerPerspectiveOnHorizon() {
   }
 
   const next = cloneExercise(current);
+  next.center.x = 0;
   next.center.y = 0;
+
+  if (state.perspective.selectedMode === "one") {
+    next.rotation.x = 0;
+    next.rotation.y = 0;
+    next.rotation.z = 0;
+  } else {
+    next.rotation.x = 0;
+    next.rotation.z = 0;
+  }
+
   transitionPerspectiveExercise(next, 260);
 }
 
