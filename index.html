@@ -13,7 +13,7 @@
         <h1>Cuby</h1>
         <p class="lede">
           Perspective drills for cubes, boxes, and cylinders, a manual vanishing-point overlay
-          builder, and timed gesture sessions with internet reference images.
+          builder, and timed gesture sessions with a bundled pose reference library.
         </p>
 
         <div class="mode-switch" aria-label="Mode switch">
@@ -211,31 +211,9 @@
                 10
               </button>
               <button type="button" class="button" data-ref-count="20" aria-pressed="false">20</button>
+              <button type="button" class="button" data-ref-add="10">+10</button>
               <button type="button" class="button" data-ref-count="0" aria-pressed="false">
                 Unlimited
-              </button>
-            </div>
-          </div>
-
-          <div class="control-group">
-            <p class="group-label">Reference Source</p>
-            <div class="controls">
-              <button
-                type="button"
-                class="button button-primary"
-                data-gesture-source="quickposes"
-                aria-pressed="true"
-              >
-                QuickPoses
-              </button>
-              <button type="button" class="button" data-gesture-source="mixed" aria-pressed="false">
-                Mixed
-              </button>
-              <button type="button" class="button" data-gesture-source="commons" aria-pressed="false">
-                Wikimedia
-              </button>
-              <button type="button" class="button" data-gesture-source="openverse" aria-pressed="false">
-                Openverse
               </button>
             </div>
           </div>
@@ -469,8 +447,8 @@
                   Open source image
                 </a>
                 <p class="gesture-note" data-gesture-note>
-                  Gesture references use a bundled QuickPoses library for large pose variety,
-                  with optional Openverse and Wikimedia fallback sources.
+                  Gesture references use a bundled QuickPoses library for large pose variety with
+                  no external source switching.
                 </p>
               </div>
 

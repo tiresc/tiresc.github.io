@@ -18,6 +18,7 @@ const ui = {
   liftButtons: document.querySelectorAll("[data-lift]"),
   durationButtons: document.querySelectorAll("[data-duration]"),
   countButtons: document.querySelectorAll("[data-ref-count]"),
+  countAddButtons: document.querySelectorAll("[data-ref-add]"),
   gestureSourceButtons: document.querySelectorAll("[data-gesture-source]"),
   gestureActionButtons: document.querySelectorAll("[data-gesture-action]"),
   gestureTime: document.querySelector("[data-gesture-time]"),
@@ -713,35 +714,14 @@ function cleanGestureTitle(title) {
     .replace(/[_-]+/g, " ");
 }
 
-function formatGestureSourceChoice(source) {
-  if (source === "quickposes") {
-    return "QuickPoses";
-  }
-
-  if (source === "commons") {
-    return "Wikimedia";
-  }
-
-  if (source === "openverse") {
-    return "Openverse";
-  }
-
-  return "Mixed";
+function formatGestureSourceChoice() {
+  return "QuickPoses";
 }
 
 function buildGestureNoteText() {
-  const label = formatGestureSourceChoice(state.gesture.selectedSource);
   const quickposesCount = quickposesManifest.length.toLocaleString();
 
-  if (state.gesture.selectedSource === "quickposes") {
-    return `Gesture references use a bundled QuickPoses pose library with ${quickposesCount} references, so the app has a much larger non-repeating pool.`;
-  }
-
-  if (state.gesture.selectedSource === "mixed") {
-    return `Gesture references use the bundled ${quickposesCount}-image QuickPoses library first, with Openverse and Wikimedia as fallback sources when needed.`;
-  }
-
-  return `Gesture references are pulled from ${label}, filtered toward single-person action photos, and not reused within the same session.`;
+  return `Gesture references use a bundled QuickPoses pose library with ${quickposesCount} references, so the app has a much larger non-repeating pool without external source switching.`;
 }
 
 function getGestureQueryTokens(query) {
@@ -790,7 +770,7 @@ function hasSupportedGestureImageUrl(url) {
       return true;
     }
 
-    return parsed.hostname === "api.openverse.org" && path.includes("/thumb/");
+    return false;
   } catch (error) {
     return /\.(jpe?g|png|webp)(?:$|[?#])/i.test(url);
   }
@@ -3151,12 +3131,6 @@ function syncGestureControls() {
     button.setAttribute("aria-pressed", String(active));
     button.classList.toggle("button-primary", active);
   }
-
-  for (const button of ui.gestureSourceButtons) {
-    const active = button.dataset.gestureSource === state.gesture.selectedSource;
-    button.setAttribute("aria-pressed", String(active));
-    button.classList.toggle("button-primary", active);
-  }
 }
 
 function syncCustomControls() {
@@ -3257,7 +3231,7 @@ function syncGestureInfo() {
   ui.gestureProgress.textContent = progressText;
   ui.gestureSourceName.textContent = activeReference
     ? activeReference.sourceName
-    : formatGestureSourceChoice(gestureState.selectedSource);
+        : formatGestureSourceChoice();
   ui.gestureTimerPill.textContent = timerText;
   ui.gestureCounterPill.textContent = progressText;
   ui.stageLabel.textContent = "Gesture Time";
@@ -3698,57 +3672,6 @@ async function handleGestureTimerDone() {
   await loadNextGestureReference();
 }
 
-function buildCommonsUrl(query, offset = 0) {
-  const url = new URL("https://commons.wikimedia.org/w/api.php");
-  url.searchParams.set("action", "query");
-  url.searchParams.set("generator", "search");
-  url.searchParams.set("gsrsearch", query);
-  url.searchParams.set("gsrnamespace", "6");
-  url.searchParams.set("gsrlimit", "18");
-  url.searchParams.set("gsroffset", String(offset));
-  url.searchParams.set("prop", "imageinfo");
-  url.searchParams.set("iiprop", "url|size");
-  url.searchParams.set("iiurlwidth", "1400");
-  url.searchParams.set("iiurlheight", "1400");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("origin", "*");
-  return url.toString();
-}
-
-function buildOpenverseUrl(query, page = 1) {
-  const url = new URL("https://api.openverse.org/v1/images/");
-  url.searchParams.set("q", query);
-  url.searchParams.set("page_size", "20");
-  url.searchParams.set("page", String(page));
-  return url.toString();
-}
-
-function buildGestureCacheKey(source, query, page) {
-  return `${source}:${page}:${query}`;
-}
-
-function buildMediaInfoUrl(fileTitles) {
-  const url = new URL("https://commons.wikimedia.org/w/api.php");
-  url.searchParams.set("action", "wbgetentities");
-  url.searchParams.set("sites", "commonswiki");
-  url.searchParams.set("titles", fileTitles.join("|"));
-  url.searchParams.set("props", "info|claims");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("origin", "*");
-  return url.toString();
-}
-
-function buildEntityLabelsUrl(ids) {
-  const url = new URL("https://commons.wikimedia.org/w/api.php");
-  url.searchParams.set("action", "wbgetentities");
-  url.searchParams.set("ids", ids.join("|"));
-  url.searchParams.set("props", "labels");
-  url.searchParams.set("languages", "en");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("origin", "*");
-  return url.toString();
-}
-
 function isValidGestureReference(reference) {
   if (!reference.imageUrl || !reference.sourceUrl) {
     return false;
@@ -3769,367 +3692,21 @@ function isValidGestureReference(reference) {
   const title = (reference.title || "").toLowerCase();
   return !gestureBlockedTerms.some((term) => title.includes(term));
 }
-
-function getEntityIdsFromStatements(entity, propertyIds) {
-  const ids = [];
-
-  for (const propertyId of propertyIds) {
-    for (const statement of entity?.statements?.[propertyId] || []) {
-      const value = statement?.mainsnak?.datavalue?.value;
-
-      if (value && typeof value === "object" && value.id) {
-        ids.push(value.id);
-      }
-    }
-  }
-
-  return ids;
-}
-
-function buildMetadataTerms(reference) {
-  return [
-    reference.title.toLowerCase(),
-    reference.provider || "",
-    reference.creator || "",
-    ...(reference.metadataLabels || []),
-  ].join(" ");
-}
-
-function scoreGestureReference(reference) {
-  const text = buildMetadataTerms(reference);
-  const aspectRatio = reference.width && reference.height ? reference.width / reference.height : 0;
-  const queryTokenMatches = new Set((reference.queryTokens || []).filter((token) => text.includes(token)));
-  const strongMatches = gestureStrongPositiveTerms.filter((term) => text.includes(term)).length;
-  const positiveMatches = gesturePositiveTerms.filter((term) => text.includes(term)).length;
-  const negativeMatches = gestureNegativeTerms.filter((term) => text.includes(term)).length;
-  const pluralMatches = gesturePluralBlockers.filter((term) => text.includes(term)).length;
-  const hasSubjectSignal =
-    /(athlete|basketball player|soccer player|tennis player|skater|figure skater|ice skater|runner|sprinter|dancer|ballerina|breakdancer|gymnast|surfer|climber|martial artist|karate|skateboarder|boxer|wrestler|yogi|yoga)/.test(
-      text,
-    );
-  const hasActionSignal =
-    /(pose|posing|jump|jumping|kick|kicking|serve|serving|skating|figure skating|ice skating|dance|dancing|leap|gymnastics|yoga|asana|parkour|vault|surf|surfing|stance|trick|spin|freeze|arabesque|shot|balance|standing)/.test(
-      text,
-    );
-  const hasSingleSubjectSignal =
-    /(single|solo|full body|full-length|individual|one person)/.test(text) || reference.depictsCount === 1;
-  const hasDescriptionOnlyMatch =
-    reference.sourceKind === "openverse" &&
-    Array.isArray(reference.fieldsMatched) &&
-    reference.fieldsMatched.length > 0 &&
-    !reference.fieldsMatched.some((field) => field === "title" || field.startsWith("tags"));
-  const hasPhotoSignal = /(photograph|photography|flickr|olympics|championship|wimbledon|dvids)/.test(
-    text,
-  );
-
-  if (reference.queryTokens?.length > 0 && queryTokenMatches.size < Math.min(2, reference.queryTokens.length)) {
-    return -100;
-  }
-
-  if (!hasSubjectSignal || !hasActionSignal || hasDescriptionOnlyMatch) {
-    return -100;
-  }
-
-  if (negativeMatches > 0 || pluralMatches > 0) {
-    return -100;
-  }
-
-  let score = strongMatches * 6 + positiveMatches * 2;
-
-  if (hasPhotoSignal) {
-    score += 4;
-  }
-
-  if (hasSingleSubjectSignal) {
-    score += 5;
-  }
-
-  if (reference.depictsCount === 1) {
-    score += 4;
-  } else if (reference.depictsCount === 2) {
-    score -= 2;
-  } else if (reference.depictsCount > 2) {
-    return -100;
-  }
-
-  if (reference.provider && gesturePreferredPhotoProviders.has(reference.provider)) {
-    score += 3;
-  }
-
-  if (aspectRatio > 1.55) {
-    score -= 12;
-  } else if (aspectRatio > 0 && aspectRatio < 0.35) {
-    return -100;
-  } else if (aspectRatio > 0.58 && aspectRatio < 1.05) {
-    score += 4;
-  } else if (aspectRatio >= 1.05 && aspectRatio <= 1.35) {
-    score += 2;
-  }
-
-  return score;
-}
-
-async function fetchMediaInfoMap(fileTitles) {
-  const mediaInfoMap = new Map();
-
-  for (const chunk of chunkArray(fileTitles, 20)) {
-    const response = await fetch(buildMediaInfoUrl(chunk));
-
-    if (!response.ok) {
-      throw new Error(`Wikimedia metadata request failed with ${response.status}`);
-    }
-
-    const payload = await response.json();
-
-    for (const entity of Object.values(payload.entities || {})) {
-      if (entity?.title) {
-        mediaInfoMap.set(entity.title, entity);
-      }
-    }
-  }
-
-  return mediaInfoMap;
-}
-
-async function fetchEntityLabels(ids) {
-  const labelMap = new Map();
-
-  for (const chunk of chunkArray(ids, 45)) {
-    const response = await fetch(buildEntityLabelsUrl(chunk));
-
-    if (!response.ok) {
-      throw new Error(`Wikimedia label request failed with ${response.status}`);
-    }
-
-    const payload = await response.json();
-
-    for (const [id, entity] of Object.entries(payload.entities || {})) {
-      const label = entity?.labels?.en?.value;
-
-      if (label) {
-        labelMap.set(id, label.toLowerCase());
-      }
-    }
-  }
-
-  return labelMap;
-}
-
-async function enrichGestureCandidates(candidates) {
-  if (candidates.length === 0) {
-    return [];
-  }
-
-  const mediaInfoMap = await fetchMediaInfoMap(candidates.map((candidate) => candidate.fileTitle));
-  const entityIds = new Set();
-
-  for (const candidate of candidates) {
-    const entity = mediaInfoMap.get(candidate.fileTitle);
-
-    for (const id of getEntityIdsFromStatements(entity, ["P180", "P921", "P31", "P136"])) {
-      entityIds.add(id);
-    }
-  }
-
-  const labelMap = await fetchEntityLabels([...entityIds]);
-
-  return candidates.map((candidate) => {
-    const entity = mediaInfoMap.get(candidate.fileTitle);
-    const metadataIds = getEntityIdsFromStatements(entity, ["P180", "P921", "P31", "P136"]);
-
-    return {
-      ...candidate,
-      depictsCount: (entity?.statements?.P180 || []).length,
-      metadataLabels: metadataIds
-        .map((id) => labelMap.get(id))
-        .filter(Boolean),
-    };
-  });
-}
-
-async function fetchCommonsCandidates(query, page = 1) {
-  const cacheKey = buildGestureCacheKey("commons", query, page);
-
-  if (gestureQueryCache.has(cacheKey)) {
-    return gestureQueryCache.get(cacheKey);
-  }
-
-  const response = await fetch(buildCommonsUrl(query, Math.max(0, (page - 1) * 18)));
-
-  if (!response.ok) {
-    throw new Error(`Wikimedia request failed with ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const pages = Object.values(payload.query?.pages || {});
-
-  const rawCandidates = pages
-    .map((pageInfo) => {
-      const info = pageInfo.imageinfo?.[0] || {};
-
-      return {
-        fileTitle: pageInfo.title,
-        title: cleanGestureTitle(pageInfo.title),
-        imageUrl: info.thumburl || info.url,
-        sourceUrl: info.descriptionurl,
-        sourceName: "Wikimedia Commons",
-        sourceKind: "commons",
-        uniqueKey: `commons:${pageInfo.title}`,
-        width: info.width || info.thumbwidth || 0,
-        height: info.height || info.thumbheight || 0,
-        query,
-        queryTokens: getGestureQueryTokens(query),
-      };
-    })
-    .filter((reference) => isValidGestureReference(reference));
-
-  const enrichedCandidates = await enrichGestureCandidates(rawCandidates);
-  const verifiedCandidates = enrichedCandidates
-    .map((reference) => ({
-      ...reference,
-      score: scoreGestureReference(reference),
-    }))
-    .filter((reference) => reference.score >= 14)
-    .sort((left, right) => right.score - left.score);
-
-  gestureQueryCache.set(cacheKey, verifiedCandidates);
-  return verifiedCandidates;
-}
-
-async function fetchOpenverseCandidates(query, page = 1) {
-  const cacheKey = buildGestureCacheKey("openverse", query, page);
-
-  if (gestureQueryCache.has(cacheKey)) {
-    return gestureQueryCache.get(cacheKey);
-  }
-
-  const response = await fetch(buildOpenverseUrl(query, page));
-
-  if (!response.ok) {
-    throw new Error(`Openverse request failed with ${response.status}`);
-  }
-
-  const payload = await response.json();
-  const verifiedCandidates = (payload.results || [])
-    .map((result) => {
-      const metadataLabels = [
-        result.provider,
-        result.source,
-        result.license,
-        ...(result.tags || []).map((tag) => tag.name),
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
-
-      return {
-        fileTitle: result.id,
-        title: cleanGestureTitle(result.title || query) || "Untitled pose",
-        imageUrl: hasSupportedGestureImageUrl(result.url) ? result.url : result.thumbnail,
-        fallbackImageUrl: result.thumbnail || "",
-        sourceUrl: result.foreign_landing_url || result.url || result.detail_url,
-        sourceName: result.provider ? `Openverse / ${result.provider}` : "Openverse",
-        sourceKind: "openverse",
-        uniqueKey: `openverse:${result.id}`,
-        width: result.width || 0,
-        height: result.height || 0,
-        provider: (result.provider || result.source || "").toLowerCase(),
-        creator: (result.creator || "").toLowerCase(),
-        metadataLabels,
-        fieldsMatched: result.fields_matched || [],
-        mature: Boolean(result.mature),
-        query,
-        queryTokens: getGestureQueryTokens(query),
-      };
-    })
-    .filter((reference) => isValidGestureReference(reference))
-    .map((reference) => ({
-      ...reference,
-      score: scoreGestureReference(reference),
-    }))
-    .filter((reference) => reference.score >= 14)
-    .sort((left, right) => right.score - left.score);
-
-  gestureQueryCache.set(cacheKey, verifiedCandidates);
-  return verifiedCandidates;
-}
-
-async function fetchPoseCandidates(source, query) {
-  if (source === "quickposes") {
-    return getQuickposesCandidates();
-  }
-
-  const page = source === "openverse" ? Math.floor(Math.random() * 4) + 1 : Math.floor(Math.random() * 3) + 1;
-
-  if (source === "openverse") {
-    return fetchOpenverseCandidates(query, page);
-  }
-
-  return fetchCommonsCandidates(query, page);
-}
-
 function getGestureSourceOrder() {
-  if (state.gesture.selectedSource === "quickposes") {
-    return ["quickposes"];
-  }
-
-  if (state.gesture.selectedSource === "commons") {
-    return ["commons"];
-  }
-
-  if (state.gesture.selectedSource === "openverse") {
-    return ["openverse"];
-  }
-
-  return ["quickposes", "openverse", "commons"];
+  return ["quickposes"];
 }
 
 async function fetchGestureReference() {
   const usedReferenceKeys = new Set(state.gesture.usedRefs.map((reference) => getGestureReferenceKey(reference)));
-  const allCandidates = [];
-  const sourceOrder = getGestureSourceOrder();
+  const quickposesCandidates = shuffle(getQuickposesCandidates()).filter(
+    (candidate) => !usedReferenceKeys.has(getGestureReferenceKey(candidate)),
+  );
 
-  if (sourceOrder.includes("quickposes")) {
-    const quickposesCandidates = shuffle(getQuickposesCandidates()).filter(
-      (candidate) => !usedReferenceKeys.has(getGestureReferenceKey(candidate)),
-    );
-
-    if (quickposesCandidates.length > 0) {
-      return quickposesCandidates[0];
-    }
-
-    if (state.gesture.selectedSource === "quickposes") {
-      throw new Error("No new QuickPoses references are left for the current session. Start a fresh session or switch sources.");
-    }
+  if (quickposesCandidates.length > 0) {
+    return quickposesCandidates[0];
   }
 
-  for (const query of shuffle(gestureSearchTerms)) {
-    for (const source of sourceOrder.filter((entry) => entry !== "quickposes")) {
-      try {
-        const candidates = dedupeGestureReferences(await fetchPoseCandidates(source, query));
-        const freshCandidates = candidates.filter(
-          (candidate) => !usedReferenceKeys.has(getGestureReferenceKey(candidate)),
-        );
-
-        if (freshCandidates.length > 0) {
-          const bestScore = freshCandidates[0].score;
-          const shortlist = freshCandidates
-            .filter((candidate) => candidate.score >= bestScore - 4)
-            .slice(0, 6);
-          return randomFrom(shortlist);
-        }
-
-        allCandidates.push(...candidates);
-      } catch (error) {}
-    }
-  }
-
-  if (dedupeGestureReferences(allCandidates).length > 0) {
-    throw new Error(
-      "No new verified single-person pose references are left for the current source. Change the source or start a fresh session.",
-    );
-  }
-
-  throw new Error("I couldn't find a clean single-person action-photo reference from the current source.");
+  throw new Error("No new QuickPoses references are left for the current session. Start a fresh session to reuse the library.");
 }
 
 async function loadNextGestureReference({ resetHistory = false } = {}) {
@@ -4223,14 +3800,20 @@ function setGestureCount(count) {
   }
 }
 
+function addGestureCount(amount) {
+  if (state.gesture.selectedCount === 0) {
+    state.gesture.selectedCount = Math.max(state.gesture.usedRefs.length, 0) + amount;
+  } else {
+    state.gesture.selectedCount += amount;
+  }
+
+  syncUi();
+}
+
 function setGestureSource(source) {
-  state.gesture.selectedSource = source;
+  state.gesture.selectedSource = "quickposes";
   state.gesture.error = "";
   syncUi();
-
-  if (state.mode === "gesture" && (state.gesture.active || state.gesture.loading)) {
-    startGestureSession({ fresh: true });
-  }
 }
 
 function setCustomPerspectiveMode(mode) {
@@ -4666,7 +4249,7 @@ function handlePerspectiveClick(event) {
   const liftButton = event.target.closest("[data-lift]");
   const durationButton = event.target.closest("[data-duration]");
   const countButton = event.target.closest("[data-ref-count]");
-  const gestureSourceButton = event.target.closest("[data-gesture-source]");
+  const countAddButton = event.target.closest("[data-ref-add]");
   const gestureActionButton = event.target.closest("[data-gesture-action]");
   const customPerspectiveButton = event.target.closest("[data-custom-perspective]");
   const customAddButton = event.target.closest("[data-custom-add]");
@@ -4740,8 +4323,8 @@ function handlePerspectiveClick(event) {
     return;
   }
 
-  if (gestureSourceButton) {
-    setGestureSource(gestureSourceButton.dataset.gestureSource);
+  if (countAddButton) {
+    addGestureCount(Number(countAddButton.dataset.refAdd));
     return;
   }
 
