@@ -625,6 +625,10 @@ function formatKind(kind) {
     return "Cylinder";
   }
 
+  if (kind === "loomis") {
+    return "Loomis Head";
+  }
+
   return "Box";
 }
 
@@ -802,6 +806,10 @@ function countVisibleFaces(exercise) {
 }
 
 function getRenderFamily(kind) {
+  if (kind === "loomis") {
+    return "loomis";
+  }
+
   return kind === "cylinder" ? "cylinder" : "box";
 }
 
@@ -854,6 +862,12 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
 
   if (kind === "cube") {
     dimensions = { x: base, y: base, z: base };
+  } else if (kind === "loomis") {
+    dimensions = {
+      x: base * 0.92,
+      y: base * 1.14,
+      z: base * 0.92,
+    };
   } else if (kind === "cylinder") {
     dimensions = {
       x: randomBetween(130, 235),
@@ -891,7 +905,7 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
 }
 
 function isReadableExercise(exercise, perspectiveMode) {
-  if (exercise.kind === "cylinder") {
+  if (exercise.kind === "cylinder" || exercise.kind === "loomis") {
     return true;
   }
 
@@ -3027,6 +3041,205 @@ function drawCylinder(exercise, projection) {
   drawLineSegments(sideSegments, visibleWidth, "#2b1d11");
 }
 
+function getSphereScreenRadius(center, radius, focalLength) {
+  const safeDepth = Math.max(center.z, radius + 1);
+  const denominator = Math.sqrt(Math.max(safeDepth * safeDepth - radius * radius, 1));
+  return (focalLength * radius) / denominator;
+}
+
+function buildProjectedCircleSegments(center, radius, basisA, basisB, projection, segmentCount = 72) {
+  const { focalLength, origin } = projection;
+  const visibleSegments = [];
+  const hiddenSegments = [];
+  const points = [];
+
+  for (let index = 0; index < segmentCount; index += 1) {
+    const angle = (index / segmentCount) * Math.PI * 2;
+    const radial = add(scale(basisA, Math.cos(angle)), scale(basisB, Math.sin(angle)));
+    const worldPoint = add(center, scale(radial, radius));
+    points.push({
+      world: worldPoint,
+      projected: projectPoint(worldPoint, focalLength, origin),
+      radial,
+    });
+  }
+
+  for (let index = 0; index < segmentCount; index += 1) {
+    const nextIndex = (index + 1) % segmentCount;
+    const radialMidpoint = normalize(add(points[index].radial, points[nextIndex].radial));
+    const midpoint = add(center, scale(radialMidpoint, radius));
+    const visible = dot(radialMidpoint, scale(midpoint, -1)) > 0;
+    const segment = [points[index].projected, points[nextIndex].projected];
+
+    if (visible) {
+      visibleSegments.push(segment);
+    } else {
+      hiddenSegments.push(segment);
+    }
+  }
+
+  return { visibleSegments, hiddenSegments };
+}
+
+function drawConstructionSegments(segments, center, radius, lineWidth, visibleStyle, hiddenStyle, showHidden) {
+  const visibleSegments = [];
+  const hiddenSegments = [];
+
+  for (const [start, end] of segments) {
+    const midpoint = {
+      x: (start.x + end.x) / 2,
+      y: (start.y + end.y) / 2,
+      z: (start.z + end.z) / 2,
+    };
+
+    if (midpoint.z <= center.z + radius * 0.08) {
+      visibleSegments.push([
+        { x: start.screen.x, y: start.screen.y },
+        { x: end.screen.x, y: end.screen.y },
+      ]);
+    } else {
+      hiddenSegments.push([
+        { x: start.screen.x, y: start.screen.y },
+        { x: end.screen.x, y: end.screen.y },
+      ]);
+    }
+  }
+
+  if (showHidden && hiddenSegments.length > 0) {
+    drawLineSegments(hiddenSegments, Math.max(1.4, lineWidth * 0.78), hiddenStyle, [9, 7]);
+  }
+
+  if (visibleSegments.length > 0) {
+    drawLineSegments(visibleSegments, lineWidth, visibleStyle);
+  }
+}
+
+function drawLoomisHead(exercise, projection) {
+  const { focalLength, origin } = projection;
+  const radius = exercise.dimensions.x / 2;
+  const headCenter = add(
+    rotatePoint({ x: 0, y: radius * 0.08, z: 0 }, exercise.rotation),
+    exercise.center,
+  );
+  const axisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation));
+  const axisY = normalize(rotatePoint({ x: 0, y: 1, z: 0 }, exercise.rotation));
+  const axisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation));
+  const visibleWidth = clamp(Math.min(state.view.width, state.view.height) * 0.005, 2.4, 4.3);
+  const hiddenWidth = Math.max(1.5, visibleWidth * 0.76);
+  const projectedCenter = projectPoint(headCenter, focalLength, origin);
+  const screenRadius = getSphereScreenRadius(headCenter, radius, focalLength);
+  const browOffset = radius * 0.12;
+  const sidePlaneOffset = radius * 0.34;
+  const sidePlaneRadius = Math.sqrt(Math.max(0, radius * radius - sidePlaneOffset * sidePlaneOffset));
+  const browRadius = Math.sqrt(Math.max(0, radius * radius - browOffset * browOffset));
+  const browRing = buildProjectedCircleSegments(
+    add(headCenter, scale(axisY, browOffset)),
+    browRadius,
+    axisX,
+    axisZ,
+    projection,
+  );
+  const centerLine = buildProjectedCircleSegments(headCenter, radius * 0.995, axisY, axisZ, projection);
+  const leftSidePlane = buildProjectedCircleSegments(
+    add(headCenter, scale(axisX, -sidePlaneOffset)),
+    sidePlaneRadius,
+    axisY,
+    axisZ,
+    projection,
+  );
+  const rightSidePlane = buildProjectedCircleSegments(
+    add(headCenter, scale(axisX, sidePlaneOffset)),
+    sidePlaneRadius,
+    axisY,
+    axisZ,
+    projection,
+  );
+  const browFrontDepth = Math.sqrt(
+    Math.max(0, radius * radius - sidePlaneOffset * sidePlaneOffset - browOffset * browOffset),
+  );
+  const chinWorld = add(headCenter, add(scale(axisY, -radius * 1.14), scale(axisZ, radius * 0.2)));
+  const chin = { ...chinWorld, screen: projectPoint(chinWorld, focalLength, origin) };
+  const leftTempleWorld = add(headCenter, add(scale(axisX, -sidePlaneOffset), scale(axisY, sidePlaneRadius * 0.62)));
+  const rightTempleWorld = add(headCenter, add(scale(axisX, sidePlaneOffset), scale(axisY, sidePlaneRadius * 0.62)));
+  const leftBrowWorld = add(
+    headCenter,
+    add(scale(axisX, -sidePlaneOffset), add(scale(axisY, browOffset), scale(axisZ, browFrontDepth))),
+  );
+  const rightBrowWorld = add(
+    headCenter,
+    add(scale(axisX, sidePlaneOffset), add(scale(axisY, browOffset), scale(axisZ, browFrontDepth))),
+  );
+  const leftJawWorld = add(
+    headCenter,
+    add(scale(axisX, -radius * 0.47), add(scale(axisY, -radius * 0.68), scale(axisZ, radius * 0.18))),
+  );
+  const rightJawWorld = add(
+    headCenter,
+    add(scale(axisX, radius * 0.47), add(scale(axisY, -radius * 0.68), scale(axisZ, radius * 0.18))),
+  );
+  const jawSegments = [
+    [
+      { ...leftTempleWorld, screen: projectPoint(leftTempleWorld, focalLength, origin) },
+      { ...leftBrowWorld, screen: projectPoint(leftBrowWorld, focalLength, origin) },
+    ],
+    [
+      { ...rightTempleWorld, screen: projectPoint(rightTempleWorld, focalLength, origin) },
+      { ...rightBrowWorld, screen: projectPoint(rightBrowWorld, focalLength, origin) },
+    ],
+    [
+      { ...leftBrowWorld, screen: projectPoint(leftBrowWorld, focalLength, origin) },
+      { ...leftJawWorld, screen: projectPoint(leftJawWorld, focalLength, origin) },
+    ],
+    [
+      { ...rightBrowWorld, screen: projectPoint(rightBrowWorld, focalLength, origin) },
+      { ...rightJawWorld, screen: projectPoint(rightJawWorld, focalLength, origin) },
+    ],
+    [
+      { ...leftJawWorld, screen: projectPoint(leftJawWorld, focalLength, origin) },
+      chin,
+    ],
+    [
+      { ...rightJawWorld, screen: projectPoint(rightJawWorld, focalLength, origin) },
+      chin,
+    ],
+    [
+      { ...leftBrowWorld, screen: projectPoint(leftBrowWorld, focalLength, origin) },
+      { ...rightBrowWorld, screen: projectPoint(rightBrowWorld, focalLength, origin) },
+    ],
+  ];
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  if (state.perspective.showHidden) {
+    drawLineSegments(centerLine.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.4)", [9, 7]);
+    drawLineSegments(browRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.4)", [9, 7]);
+    drawLineSegments(leftSidePlane.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.34)", [9, 7]);
+    drawLineSegments(rightSidePlane.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.34)", [9, 7]);
+  }
+
+  ctx.strokeStyle = "#2b1d11";
+  ctx.lineWidth = visibleWidth;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(projectedCenter.x, projectedCenter.y, screenRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  drawLineSegments(centerLine.visibleSegments, Math.max(1.7, visibleWidth * 0.82), "rgba(74, 35, 17, 0.92)");
+  drawLineSegments(browRing.visibleSegments, Math.max(1.7, visibleWidth * 0.82), "rgba(74, 35, 17, 0.92)");
+  drawLineSegments(leftSidePlane.visibleSegments, Math.max(1.45, visibleWidth * 0.72), "rgba(74, 35, 17, 0.8)");
+  drawLineSegments(rightSidePlane.visibleSegments, Math.max(1.45, visibleWidth * 0.72), "rgba(74, 35, 17, 0.8)");
+  drawConstructionSegments(
+    jawSegments,
+    headCenter,
+    radius,
+    Math.max(1.8, visibleWidth * 0.84),
+    "#2b1d11",
+    "rgba(97, 74, 47, 0.42)",
+    state.perspective.showHidden,
+  );
+}
+
 function drawExercise(exercise, alpha = 1) {
   const projection = getProjectionSettings();
 
@@ -3035,6 +3248,8 @@ function drawExercise(exercise, alpha = 1) {
 
   if (exercise.kind === "cylinder") {
     drawCylinder(exercise, projection);
+  } else if (exercise.kind === "loomis") {
+    drawLoomisHead(exercise, projection);
   } else {
     drawBox(exercise, projection);
   }
@@ -3112,6 +3327,8 @@ function syncPerspectiveInfo(exercise) {
   ui.size.textContent =
     exercise.kind === "cylinder"
       ? `${Math.round(exercise.dimensions.x)} dia × ${Math.round(exercise.dimensions.y)} h`
+      : exercise.kind === "loomis"
+        ? `${Math.round(exercise.dimensions.x)} cranium dia`
       : `${Math.round(exercise.dimensions.x)} × ${Math.round(exercise.dimensions.y)} × ${Math.round(exercise.dimensions.z)}`;
   ui.view.textContent = describePerspectiveView();
   ui.stageLabel.textContent = "Perspective Drill";
@@ -4540,6 +4757,11 @@ function handleKeyboard(event) {
     state.perspective.selectedShape = "cylinder";
     syncUi();
     setPerspectiveExercise("cylinder");
+  } else if (key === "m") {
+    state.mode = "perspective";
+    state.perspective.selectedShape = "loomis";
+    syncUi();
+    setPerspectiveExercise("loomis");
   } else if (key === "1") {
     state.mode = "perspective";
     state.perspective.selectedMode = "one";
