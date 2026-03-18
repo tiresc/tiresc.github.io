@@ -77,6 +77,12 @@ const guideEdgePairs = [
   [3, 7],
 ];
 
+const axisEdgeGroups = [
+  { axis: "x", indices: [[0, 1], [2, 3], [4, 5], [6, 7]] },
+  { axis: "y", indices: [[0, 2], [1, 3], [4, 6], [5, 7]] },
+  { axis: "z", indices: [[0, 4], [1, 5], [2, 6], [3, 7]] },
+];
+
 const cylinderGuidePairs = [
   { axis: "depth", faces: ["near", "far"] },
   { axis: "width", faces: ["left", "right"] },
@@ -303,6 +309,7 @@ const state = {
     autoTimer: 0,
     showHidden: true,
     showGuides: false,
+    showPlaneArrows: false,
     showCylinderGuides: false,
     zoomedOut: false,
     rafId: 0,
@@ -653,6 +660,10 @@ function formatPerspectiveStatus() {
 
   if (state.perspective.showGuides) {
     fragments.push("guides");
+  }
+
+  if (state.perspective.showPlaneArrows) {
+    fragments.push("plane arrows");
   }
 
   if (state.perspective.showCylinderGuides) {
@@ -2901,6 +2912,131 @@ function drawPerspectiveGuides(exercise, alpha = 1) {
   ctx.restore();
 }
 
+function drawArrow(start, end, color, lineWidth) {
+  const direction = subtract2(end, start);
+  const length = Math.hypot(direction.x, direction.y);
+
+  if (length < 6) {
+    return;
+  }
+
+  const unit = { x: direction.x / length, y: direction.y / length };
+  const normal = { x: -unit.y, y: unit.x };
+  const headLength = clamp(length * 0.22, 9, 16);
+  const headWidth = clamp(lineWidth * 2.2, 6, 11);
+  const headBase = {
+    x: end.x - unit.x * headLength,
+    y: end.y - unit.y * headLength,
+  };
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(end.x, end.y);
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(end.x, end.y);
+  ctx.lineTo(headBase.x + normal.x * headWidth * 0.5, headBase.y + normal.y * headWidth * 0.5);
+  ctx.lineTo(headBase.x - normal.x * headWidth * 0.5, headBase.y - normal.y * headWidth * 0.5);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPlaneArrowOverlay(exercise, projection, alpha = 1) {
+  const { focalLength, origin, guideBounds } = projection;
+  const guideDimensions =
+    exercise.kind === "cylinder"
+      ? { x: exercise.dimensions.x, y: exercise.dimensions.y, z: exercise.dimensions.x }
+      : exercise.dimensions;
+  const baseVertices = createBoxVertices(guideDimensions);
+  const worldVertices = baseVertices.map((vertex) => add(rotatePoint(vertex, exercise.rotation), exercise.center));
+  const projectedVertices = worldVertices.map((vertex) => projectPoint(vertex, focalLength, origin));
+  const faceVisibility = classifyFaces(worldVertices);
+  const axisDirections = {
+    x: normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation)),
+    y: normalize(rotatePoint({ x: 0, y: 1, z: 0 }, exercise.rotation)),
+    z: normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation)),
+  };
+  const vanishingPoints = {
+    x: computeVanishingPoint(axisDirections.x, focalLength, origin),
+    y: computeVanishingPoint(axisDirections.y, focalLength, origin),
+    z: computeVanishingPoint(axisDirections.z, focalLength, origin),
+  };
+  const guideWidth = Math.max(1.6, Math.min(state.view.width, state.view.height) * 0.0027);
+
+  ctx.save();
+  ctx.globalAlpha = clamp(alpha, 0, 1);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  for (const group of axisEdgeGroups) {
+    const vp = vanishingPoints[group.axis];
+
+    if (!vp) {
+      continue;
+    }
+
+    const usableEdges = [];
+
+    for (const [aIndex, bIndex] of group.indices) {
+      const edgeMeta = edges.find((edge) =>
+        (edge.indices[0] === aIndex && edge.indices[1] === bIndex) ||
+        (edge.indices[0] === bIndex && edge.indices[1] === aIndex),
+      );
+      const isVisible = edgeMeta ? edgeMeta.faces.some((name) => faceVisibility.get(name)) : true;
+
+      if (!isVisible) {
+        continue;
+      }
+
+      const a = projectedVertices[aIndex];
+      const b = projectedVertices[bIndex];
+      const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const toVp = subtract2(vp, midpoint);
+      const distance = Math.hypot(toVp.x, toVp.y);
+
+      if (distance < 18) {
+        continue;
+      }
+
+      usableEdges.push({ midpoint, distance, direction: { x: toVp.x / distance, y: toVp.y / distance } });
+    }
+
+    usableEdges.sort((left, right) => left.distance - right.distance);
+
+    for (const edge of usableEdges.slice(0, 2)) {
+      const arrowLength = clamp(edge.distance * 0.2, 28, 64);
+      const start = edge.midpoint;
+      const end = {
+        x: start.x + edge.direction.x * arrowLength,
+        y: start.y + edge.direction.y * arrowLength,
+      };
+
+      if (
+        !pointInBounds(start, state.view.width, state.view.height, 10) ||
+        !pointInBounds(end, state.view.width, state.view.height, 14)
+      ) {
+        continue;
+      }
+
+      drawArrow(start, end, "rgba(46, 120, 232, 0.92)", guideWidth);
+    }
+
+    if (isPointInside(vp, guideBounds)) {
+      ctx.fillStyle = "rgba(46, 120, 232, 0.92)";
+      ctx.beginPath();
+      ctx.arc(vp.x, vp.y, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
 function drawBox(exercise, projection) {
   const { focalLength, origin } = projection;
   const baseVertices = createBoxVertices(exercise.dimensions);
@@ -3296,6 +3432,8 @@ function syncPerspectiveControls() {
         ? state.perspective.showHidden
         : toggle === "guides"
           ? state.perspective.showGuides
+          : toggle === "plane-arrows"
+            ? state.perspective.showPlaneArrows
           : toggle === "cylinder-guides"
             ? state.perspective.showCylinderGuides
           : toggle === "zoom"
@@ -3307,12 +3445,16 @@ function syncPerspectiveControls() {
 
   const hiddenButton = document.querySelector('[data-toggle="hidden"]');
   const guidesButton = document.querySelector('[data-toggle="guides"]');
+  const planeArrowsButton = document.querySelector('[data-toggle="plane-arrows"]');
   const cylinderGuidesButton = document.querySelector('[data-toggle="cylinder-guides"]');
   const zoomButton = document.querySelector('[data-toggle="zoom"]');
   const autoButton = document.querySelector('[data-toggle="auto"]');
 
   hiddenButton.textContent = state.perspective.showHidden ? "Hidden Lines On" : "Hidden Lines Off";
   guidesButton.textContent = state.perspective.showGuides ? "Guides On" : "Guides Off";
+  if (planeArrowsButton) {
+    planeArrowsButton.textContent = state.perspective.showPlaneArrows ? "Plane Arrows On" : "Plane Arrows";
+  }
   if (cylinderGuidesButton) {
     cylinderGuidesButton.textContent = state.perspective.showCylinderGuides
       ? "Cylinder Guides On"
@@ -3533,6 +3675,11 @@ function renderPerspective(now = performance.now()) {
       drawPerspectiveGuides(frame.toExercise, frame.toAlpha);
     }
 
+    if (state.perspective.showPlaneArrows) {
+      drawPlaneArrowOverlay(frame.fromExercise, getProjectionSettings(), frame.fromAlpha);
+      drawPlaneArrowOverlay(frame.toExercise, getProjectionSettings(), frame.toAlpha);
+    }
+
     drawExercise(frame.fromExercise, frame.fromAlpha);
     drawExercise(frame.toExercise, frame.toAlpha);
     return;
@@ -3543,6 +3690,10 @@ function renderPerspective(now = performance.now()) {
 
   if (state.perspective.showGuides) {
     drawPerspectiveGuides(frame.exercise);
+  }
+
+  if (state.perspective.showPlaneArrows) {
+    drawPlaneArrowOverlay(frame.exercise, getProjectionSettings());
   }
 
   drawExercise(frame.exercise);
@@ -3816,6 +3967,11 @@ function togglePerspectiveHidden() {
 
 function togglePerspectiveGuides() {
   state.perspective.showGuides = !state.perspective.showGuides;
+  requestRender();
+}
+
+function togglePerspectivePlaneArrows() {
+  state.perspective.showPlaneArrows = !state.perspective.showPlaneArrows;
   requestRender();
 }
 
@@ -4508,6 +4664,8 @@ function handlePerspectiveClick(event) {
       togglePerspectiveHidden();
     } else if (toggle === "guides") {
       togglePerspectiveGuides();
+    } else if (toggle === "plane-arrows") {
+      togglePerspectivePlaneArrows();
     } else if (toggle === "cylinder-guides") {
       togglePerspectiveCylinderGuides();
     } else if (toggle === "zoom") {
@@ -4785,6 +4943,12 @@ function handleKeyboard(event) {
     }
 
     togglePerspectiveGuides();
+  } else if (key === "p") {
+    if (state.mode === "gesture") {
+      return;
+    }
+
+    togglePerspectivePlaneArrows();
   } else if (key === "z") {
     togglePerspectiveZoom();
   } else if (key === "a") {
