@@ -3008,7 +3008,7 @@ function drawPlaneArrowOverlay(exercise, projection, alpha = 1) {
 
     usableEdges.sort((left, right) => left.distance - right.distance);
 
-    for (const edge of usableEdges.slice(0, 2)) {
+    for (const edge of usableEdges) {
       const arrowLength = clamp(edge.distance * 0.2, 28, 64);
       const start = edge.midpoint;
       const end = {
