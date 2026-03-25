@@ -12,7 +12,7 @@
         <p class="eyebrow">Drawing Drill</p>
         <h1>Cuby</h1>
         <p class="lede">
-          Perspective drills for cubes, boxes, cylinders, and Loomis heads, a manual vanishing-point overlay
+          Perspective drills for cubes, boxes, cylinders, cones, spheres, and Loomis heads, a manual vanishing-point overlay
           builder, and timed gesture sessions with a bundled pose reference library.
         </p>
 
@@ -40,6 +40,8 @@
               <button type="button" class="button" data-shape="cylinder" aria-pressed="false">
                 Cylinder
               </button>
+              <button type="button" class="button" data-shape="cone" aria-pressed="false">Cone</button>
+              <button type="button" class="button" data-shape="sphere" aria-pressed="false">Sphere</button>
               <button type="button" class="button" data-shape="loomis" aria-pressed="false">
                 Loomis Head
               </button>
@@ -82,6 +84,22 @@
               <button type="button" class="button" data-toggle="auto" aria-pressed="false">
                 Auto Shuffle
               </button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <p class="group-label">Lighting</p>
+            <div class="controls">
+              <button type="button" class="button button-primary" data-light="off" aria-pressed="true">Off</button>
+              <button type="button" class="button" data-light="nw" aria-pressed="false">Top Left</button>
+              <button type="button" class="button" data-light="n" aria-pressed="false">Top</button>
+              <button type="button" class="button" data-light="ne" aria-pressed="false">Top Right</button>
+              <button type="button" class="button" data-light="w" aria-pressed="false">Left</button>
+              <button type="button" class="button" data-light="front" aria-pressed="false">Front</button>
+              <button type="button" class="button" data-light="e" aria-pressed="false">Right</button>
+              <button type="button" class="button" data-light="sw" aria-pressed="false">Bottom Left</button>
+              <button type="button" class="button" data-light="s" aria-pressed="false">Bottom</button>
+              <button type="button" class="button" data-light="se" aria-pressed="false">Bottom Right</button>
             </div>
           </div>
 
@@ -136,7 +154,7 @@
 
           <p class="shortcuts">
             Perspective shortcuts: <kbd>Space</kbd> shuffle, <kbd>C</kbd> cube, <kbd>B</kbd> box,
-            <kbd>L</kbd> cylinder, <kbd>M</kbd> Loomis head, <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> perspective,
+            <kbd>L</kbd> cylinder, <kbd>K</kbd> cone, <kbd>O</kbd> sphere, <kbd>M</kbd> Loomis head, <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> perspective,
             <kbd>H</kbd> hidden lines, <kbd>G</kbd> guides, <kbd>P</kbd> plane arrows, <kbd>Z</kbd> zoom, <kbd>A</kbd> auto,
             <kbd>R</kbd> rotate right, <kbd>Shift</kbd>+<kbd>R</kbd> rotate left,
             <kbd>Arrow Left</kbd>/<kbd>Arrow Right</kbd> rotate horizontally,

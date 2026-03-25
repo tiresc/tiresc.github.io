@@ -14,6 +14,7 @@ const ui = {
   shapeButtons: document.querySelectorAll("[data-shape]"),
   perspectiveButtons: document.querySelectorAll("[data-perspective-mode]"),
   toggleButtons: document.querySelectorAll("[data-toggle]"),
+  lightButtons: document.querySelectorAll("[data-light]"),
   rotateButtons: document.querySelectorAll("[data-rotate]"),
   liftButtons: document.querySelectorAll("[data-lift]"),
   durationButtons: document.querySelectorAll("[data-duration]"),
@@ -82,6 +83,19 @@ const axisEdgeGroups = [
   { axis: "y", indices: [[0, 2], [1, 3], [4, 6], [5, 7]] },
   { axis: "z", indices: [[0, 4], [1, 5], [2, 6], [3, 7]] },
 ];
+
+const lightPresets = {
+  off: { label: "Off", direction: null },
+  nw: { label: "Top Left", direction: { x: -0.78, y: 0.88, z: -0.62 } },
+  n: { label: "Top", direction: { x: 0, y: 1, z: -0.54 } },
+  ne: { label: "Top Right", direction: { x: 0.78, y: 0.88, z: -0.62 } },
+  w: { label: "Left", direction: { x: -1, y: 0.08, z: -0.42 } },
+  front: { label: "Front", direction: { x: 0, y: 0.12, z: -1 } },
+  e: { label: "Right", direction: { x: 1, y: 0.08, z: -0.42 } },
+  sw: { label: "Bottom Left", direction: { x: -0.74, y: -0.82, z: -0.56 } },
+  s: { label: "Bottom", direction: { x: 0, y: -1, z: -0.48 } },
+  se: { label: "Bottom Right", direction: { x: 0.74, y: -0.82, z: -0.56 } },
+};
 
 const cylinderGuidePairs = [
   { axis: "depth", faces: ["near", "far"] },
@@ -301,6 +315,7 @@ const state = {
   perspective: {
     selectedShape: "random",
     selectedMode: "three",
+    lightPreset: "off",
     current: null,
     animation: null,
     interaction: null,
@@ -632,11 +647,23 @@ function formatKind(kind) {
     return "Cylinder";
   }
 
+  if (kind === "cone") {
+    return "Cone";
+  }
+
+  if (kind === "sphere") {
+    return "Sphere";
+  }
+
   if (kind === "loomis") {
     return "Loomis Head";
   }
 
   return "Box";
+}
+
+function formatLightPreset(preset) {
+  return lightPresets[preset]?.label || "Off";
 }
 
 function formatPerspectiveMode(mode) {
@@ -668,6 +695,10 @@ function formatPerspectiveStatus() {
 
   if (state.perspective.showCylinderGuides) {
     fragments.push("cylinder guides");
+  }
+
+  if (state.perspective.lightPreset !== "off") {
+    fragments.push(`${formatLightPreset(state.perspective.lightPreset).toLowerCase()} light`);
   }
 
   if (state.perspective.zoomedOut) {
@@ -821,6 +852,14 @@ function getRenderFamily(kind) {
     return "loomis";
   }
 
+  if (kind === "sphere") {
+    return "sphere";
+  }
+
+  if (kind === "cone") {
+    return "cone";
+  }
+
   return kind === "cylinder" ? "cylinder" : "box";
 }
 
@@ -835,8 +874,16 @@ function resolveExerciseKind(shapeMode) {
     return "cube";
   }
 
-  if (roll < 0.58) {
+  if (roll < 0.46) {
     return "cylinder";
+  }
+
+  if (roll < 0.62) {
+    return "cone";
+  }
+
+  if (roll < 0.78) {
+    return "sphere";
   }
 
   return "box";
@@ -886,6 +933,19 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
       z: 0,
     };
     dimensions.z = dimensions.x;
+  } else if (kind === "cone") {
+    dimensions = {
+      x: randomBetween(140, 240),
+      y: randomBetween(210, 340),
+      z: 0,
+    };
+    dimensions.z = dimensions.x;
+  } else if (kind === "sphere") {
+    dimensions = {
+      x: base * 0.96,
+      y: base * 0.96,
+      z: base * 0.96,
+    };
   } else {
     dimensions = {
       x: base,
@@ -916,7 +976,7 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
 }
 
 function isReadableExercise(exercise, perspectiveMode) {
-  if (exercise.kind === "cylinder" || exercise.kind === "loomis") {
+  if (exercise.kind === "cylinder" || exercise.kind === "cone" || exercise.kind === "sphere" || exercise.kind === "loomis") {
     return true;
   }
 
@@ -2857,6 +2917,235 @@ function drawSingleLine(start, end, lineWidth, strokeStyle, dashPattern = []) {
   ctx.stroke();
 }
 
+function getPerspectiveLightDirection() {
+  const preset = lightPresets[state.perspective.lightPreset];
+  return preset?.direction ? normalize(preset.direction) : null;
+}
+
+function mixColorChannel(a, b, t) {
+  return Math.round(lerp(a, b, t));
+}
+
+function buildShadeFill(intensity, alpha = 0.72) {
+  const shadow = { r: 104, g: 86, b: 60 };
+  const mid = { r: 182, g: 154, b: 116 };
+  const light = { r: 247, g: 234, b: 202 };
+  const t = clamp(intensity, 0, 1);
+  const base = t < 0.58
+    ? {
+        r: mixColorChannel(shadow.r, mid.r, t / 0.58),
+        g: mixColorChannel(shadow.g, mid.g, t / 0.58),
+        b: mixColorChannel(shadow.b, mid.b, t / 0.58),
+      }
+    : {
+        r: mixColorChannel(mid.r, light.r, (t - 0.58) / 0.42),
+        g: mixColorChannel(mid.g, light.g, (t - 0.58) / 0.42),
+        b: mixColorChannel(mid.b, light.b, (t - 0.58) / 0.42),
+      };
+  return `rgba(${base.r}, ${base.g}, ${base.b}, ${alpha})`;
+}
+
+function getLitIntensity(normal, lightDirection, ambient = 0.2, diffuse = 0.8) {
+  if (!lightDirection) {
+    return 0;
+  }
+
+  return clamp(ambient + Math.max(0, dot(normalize(normal), lightDirection)) * diffuse, 0, 1);
+}
+
+function fillPolygon(points, fillStyle, alpha = 1) {
+  if (points.length < 3) {
+    return;
+  }
+
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.fillStyle = fillStyle;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index].x, points[index].y);
+  }
+
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function fillBoxLighting(worldVertices, projectedVertices, faceVisibility) {
+  const lightDirection = getPerspectiveLightDirection();
+
+  if (!lightDirection) {
+    return;
+  }
+
+  const visibleFaces = faceDefinitions
+    .filter((face) => faceVisibility.get(face.name))
+    .map((face) => {
+      const points = face.indices.map((index) => worldVertices[index]);
+      const normal = cross(subtract(points[1], points[0]), subtract(points[2], points[0]));
+      const center = averagePoints(points);
+      const intensity = getLitIntensity(normal, lightDirection, 0.16, 0.84);
+      return {
+        points: face.indices.map((index) => projectedVertices[index]),
+        depth: center.z,
+        intensity,
+      };
+    })
+    .sort((left, right) => right.depth - left.depth);
+
+  for (const face of visibleFaces) {
+    fillPolygon(face.points, buildShadeFill(face.intensity, 0.76));
+  }
+}
+
+function buildCylinderCapPolygon(center, basisA, basisB, radius, projection, segmentCount = 72) {
+  const points = [];
+
+  for (let index = 0; index < segmentCount; index += 1) {
+    const angle = (index / segmentCount) * Math.PI * 2;
+    const radial = add(scale(basisA, Math.cos(angle)), scale(basisB, Math.sin(angle)));
+    points.push(projectPoint(add(center, scale(radial, radius)), projection.focalLength, projection.origin));
+  }
+
+  return points;
+}
+
+function fillCylinderLighting(exercise, projection, axis, basisX, basisZ, topCenter, bottomCenter, topWorld, bottomWorld) {
+  const lightDirection = getPerspectiveLightDirection();
+
+  if (!lightDirection) {
+    return;
+  }
+
+  const radius = exercise.dimensions.x / 2;
+  const surfaceBands = [];
+
+  for (let index = 0; index < topWorld.length; index += 1) {
+    const nextIndex = (index + 1) % topWorld.length;
+    const topA = topWorld[index];
+    const topB = topWorld[nextIndex];
+    const bottomA = bottomWorld[index];
+    const bottomB = bottomWorld[nextIndex];
+    const radialMidpoint = normalize(add(topA.radial, topB.radial));
+    const bandCenter = averagePoints([topA.point, topB.point, bottomA.point, bottomB.point]);
+    surfaceBands.push({
+      points: [
+        projectPoint(topA.point, projection.focalLength, projection.origin),
+        projectPoint(topB.point, projection.focalLength, projection.origin),
+        projectPoint(bottomB.point, projection.focalLength, projection.origin),
+        projectPoint(bottomA.point, projection.focalLength, projection.origin),
+      ],
+      depth: bandCenter.z,
+      intensity: getLitIntensity(radialMidpoint, lightDirection, 0.18, 0.78),
+    });
+  }
+
+  surfaceBands.sort((left, right) => right.depth - left.depth);
+
+  for (const band of surfaceBands) {
+    fillPolygon(band.points, buildShadeFill(band.intensity, 0.58));
+  }
+
+  const topNormal = axis;
+  const bottomNormal = scale(axis, -1);
+  const topCapIntensity = getLitIntensity(topNormal, lightDirection, 0.14, 0.7);
+  const bottomCapIntensity = getLitIntensity(bottomNormal, lightDirection, 0.14, 0.7);
+  const topVisibility = dot(topNormal, scale(topCenter, -1));
+  const bottomVisibility = dot(bottomNormal, scale(bottomCenter, -1));
+
+  if (topVisibility > 0) {
+    fillPolygon(
+      buildCylinderCapPolygon(topCenter, basisX, basisZ, radius, projection),
+      buildShadeFill(topCapIntensity, 0.72),
+    );
+  }
+
+  if (bottomVisibility > 0) {
+    fillPolygon(
+      buildCylinderCapPolygon(bottomCenter, basisX, basisZ, radius, projection),
+      buildShadeFill(bottomCapIntensity, 0.72),
+    );
+  }
+}
+
+function fillConeLighting(exercise, projection, apex, baseWorld, axis) {
+  const lightDirection = getPerspectiveLightDirection();
+
+  if (!lightDirection) {
+    return;
+  }
+
+  const sideFaces = [];
+
+  for (let index = 0; index < baseWorld.length; index += 1) {
+    const nextIndex = (index + 1) % baseWorld.length;
+    const a = baseWorld[index];
+    const b = baseWorld[nextIndex];
+    const normal = cross(subtract(b.point, apex), subtract(a.point, apex));
+    const center = averagePoints([apex, a.point, b.point]);
+    sideFaces.push({
+      points: [
+        projectPoint(apex, projection.focalLength, projection.origin),
+        projectPoint(a.point, projection.focalLength, projection.origin),
+        projectPoint(b.point, projection.focalLength, projection.origin),
+      ],
+      depth: center.z,
+      intensity: getLitIntensity(normal, lightDirection, 0.16, 0.82),
+    });
+  }
+
+  sideFaces.sort((left, right) => right.depth - left.depth);
+
+  for (const face of sideFaces) {
+    fillPolygon(face.points, buildShadeFill(face.intensity, 0.64));
+  }
+
+  const baseNormal = scale(axis, -1);
+
+  if (dot(baseNormal, scale(averagePoints(baseWorld.map((entry) => entry.point)), -1)) > 0) {
+    fillPolygon(
+      baseWorld.map((entry) => projectPoint(entry.point, projection.focalLength, projection.origin)),
+      buildShadeFill(getLitIntensity(baseNormal, lightDirection, 0.14, 0.72), 0.72),
+    );
+  }
+}
+
+function fillSphereLighting(center, radius, projection) {
+  const lightDirection = getPerspectiveLightDirection();
+
+  if (!lightDirection) {
+    return;
+  }
+
+  const screenCenter = projectPoint(center, projection.focalLength, projection.origin);
+  const screenRadius = getSphereScreenRadius(center, radius, projection.focalLength);
+  const highlightOffset = {
+    x: lightDirection.x * screenRadius * 0.34,
+    y: -lightDirection.y * screenRadius * 0.34,
+  };
+  const gradient = ctx.createRadialGradient(
+    screenCenter.x + highlightOffset.x,
+    screenCenter.y + highlightOffset.y,
+    screenRadius * 0.12,
+    screenCenter.x + screenRadius * 0.1,
+    screenCenter.y + screenRadius * 0.18,
+    screenRadius * 1.04,
+  );
+  gradient.addColorStop(0, "rgba(255, 248, 228, 0.9)");
+  gradient.addColorStop(0.28, "rgba(228, 206, 165, 0.78)");
+  gradient.addColorStop(0.72, "rgba(157, 124, 82, 0.72)");
+  gradient.addColorStop(1, "rgba(90, 68, 46, 0.76)");
+
+  ctx.save();
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(screenCenter.x, screenCenter.y, screenRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawPerspectiveGuides(exercise, alpha = 1) {
   const { origin, focalLength, guideBounds } = getProjectionSettings();
   const guideDimensions =
@@ -2947,6 +3236,10 @@ function drawArrow(start, end, color, lineWidth) {
 }
 
 function drawPlaneArrowOverlay(exercise, projection, alpha = 1) {
+  if (exercise.kind === "sphere") {
+    return;
+  }
+
   const { focalLength, origin, guideBounds } = projection;
   const guideDimensions =
     exercise.kind === "cylinder"
@@ -3064,6 +3357,8 @@ function drawBox(exercise, projection) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  fillBoxLighting(worldVertices, projectedVertices, faceVisibility);
+
   if (state.perspective.showHidden) {
     drawLineSegments(hiddenEdges, hiddenWidth, "rgba(97, 74, 47, 0.45)", [9, 7]);
   }
@@ -3167,6 +3462,8 @@ function drawCylinder(exercise, projection) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  fillCylinderLighting(exercise, projection, axis, basisX, basisZ, topCenter, bottomCenter, topWorld, bottomWorld);
+
   if (state.perspective.showHidden) {
     drawLineSegments(topRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.45)", [9, 7]);
     drawLineSegments(bottomRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.45)", [9, 7]);
@@ -3174,6 +3471,66 @@ function drawCylinder(exercise, projection) {
 
   drawLineSegments(topRing.visibleSegments, visibleWidth, "#2b1d11");
   drawLineSegments(bottomRing.visibleSegments, visibleWidth, "#2b1d11");
+  drawLineSegments(sideSegments, visibleWidth, "#2b1d11");
+}
+
+function drawCone(exercise, projection) {
+  const { focalLength, origin } = projection;
+  const radius = exercise.dimensions.x / 2;
+  const heightValue = exercise.dimensions.y;
+  const rotation = exercise.rotation;
+  const segmentCount = 72;
+  const axis = normalize(rotatePoint({ x: 0, y: 1, z: 0 }, rotation));
+  const basisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, rotation));
+  const basisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, rotation));
+  const apex = add(rotatePoint({ x: 0, y: heightValue / 2, z: 0 }, rotation), exercise.center);
+  const baseCenter = add(rotatePoint({ x: 0, y: -heightValue / 2, z: 0 }, rotation), exercise.center);
+  const viewer = normalize(scale(exercise.center, -1));
+  let nearDirection = subtract(viewer, scale(axis, dot(viewer, axis)));
+
+  if (magnitude(nearDirection) < 0.00001) {
+    nearDirection = basisZ;
+  }
+
+  nearDirection = normalize(nearDirection);
+
+  let sideDirection = cross(axis, nearDirection);
+
+  if (magnitude(sideDirection) < 0.00001) {
+    sideDirection = basisX;
+  }
+
+  sideDirection = normalize(sideDirection);
+
+  const baseWorld = [];
+  const baseProjected = [];
+
+  for (let index = 0; index < segmentCount; index += 1) {
+    const angle = (index / segmentCount) * Math.PI * 2;
+    const radial = add(scale(basisX, Math.cos(angle)), scale(basisZ, Math.sin(angle)));
+    const point = add(baseCenter, scale(radial, radius));
+    baseWorld.push({ point, radial });
+    baseProjected.push(projectPoint(point, focalLength, origin));
+  }
+
+  const baseRing = buildRingSegments(baseWorld, baseProjected, nearDirection);
+  const visibleWidth = clamp(Math.min(state.view.width, state.view.height) * 0.005, 2.4, 4.3);
+  const hiddenWidth = Math.max(1.5, visibleWidth * 0.76);
+  const sideSegments = [-1, 1].map((direction) => {
+    const basePoint = add(baseCenter, scale(sideDirection, radius * direction));
+    return [projectPoint(apex, focalLength, origin), projectPoint(basePoint, focalLength, origin)];
+  });
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  fillConeLighting(exercise, projection, apex, baseWorld, axis);
+
+  if (state.perspective.showHidden) {
+    drawLineSegments(baseRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.45)", [9, 7]);
+  }
+
+  drawLineSegments(baseRing.visibleSegments, visibleWidth, "#2b1d11");
   drawLineSegments(sideSegments, visibleWidth, "#2b1d11");
 }
 
@@ -3347,6 +3704,8 @@ function drawLoomisHead(exercise, projection) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  fillSphereLighting(headCenter, radius, projection);
+
   if (state.perspective.showHidden) {
     drawLineSegments(centerLine.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.4)", [9, 7]);
     drawLineSegments(browRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.4)", [9, 7]);
@@ -3376,6 +3735,41 @@ function drawLoomisHead(exercise, projection) {
   );
 }
 
+function drawSphere(exercise, projection) {
+  const { focalLength, origin } = projection;
+  const radius = exercise.dimensions.x / 2;
+  const center = exercise.center;
+  const axisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation));
+  const axisY = normalize(rotatePoint({ x: 0, y: 1, z: 0 }, exercise.rotation));
+  const axisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation));
+  const projectedCenter = projectPoint(center, focalLength, origin);
+  const screenRadius = getSphereScreenRadius(center, radius, focalLength);
+  const horizontalRing = buildProjectedCircleSegments(center, radius * 0.995, axisX, axisZ, projection);
+  const verticalRing = buildProjectedCircleSegments(center, radius * 0.995, axisY, axisZ, projection);
+  const visibleWidth = clamp(Math.min(state.view.width, state.view.height) * 0.005, 2.4, 4.3);
+  const hiddenWidth = Math.max(1.5, visibleWidth * 0.76);
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  fillSphereLighting(center, radius, projection);
+
+  if (state.perspective.showHidden) {
+    drawLineSegments(horizontalRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.42)", [9, 7]);
+    drawLineSegments(verticalRing.hiddenSegments, hiddenWidth, "rgba(97, 74, 47, 0.42)", [9, 7]);
+  }
+
+  ctx.strokeStyle = "#2b1d11";
+  ctx.lineWidth = visibleWidth;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(projectedCenter.x, projectedCenter.y, screenRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  drawLineSegments(horizontalRing.visibleSegments, Math.max(1.7, visibleWidth * 0.82), "rgba(74, 35, 17, 0.88)");
+  drawLineSegments(verticalRing.visibleSegments, Math.max(1.7, visibleWidth * 0.82), "rgba(74, 35, 17, 0.88)");
+}
+
 function drawExercise(exercise, alpha = 1) {
   const projection = getProjectionSettings();
 
@@ -3384,6 +3778,10 @@ function drawExercise(exercise, alpha = 1) {
 
   if (exercise.kind === "cylinder") {
     drawCylinder(exercise, projection);
+  } else if (exercise.kind === "cone") {
+    drawCone(exercise, projection);
+  } else if (exercise.kind === "sphere") {
+    drawSphere(exercise, projection);
   } else if (exercise.kind === "loomis") {
     drawLoomisHead(exercise, projection);
   } else {
@@ -3421,6 +3819,12 @@ function syncPerspectiveControls() {
 
   for (const button of ui.perspectiveButtons) {
     const active = button.dataset.perspectiveMode === state.perspective.selectedMode;
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("button-primary", active);
+  }
+
+  for (const button of ui.lightButtons) {
+    const active = button.dataset.light === state.perspective.lightPreset;
     button.setAttribute("aria-pressed", String(active));
     button.classList.toggle("button-primary", active);
   }
@@ -3469,6 +3873,10 @@ function syncPerspectiveInfo(exercise) {
   ui.size.textContent =
     exercise.kind === "cylinder"
       ? `${Math.round(exercise.dimensions.x)} dia × ${Math.round(exercise.dimensions.y)} h`
+      : exercise.kind === "cone"
+        ? `${Math.round(exercise.dimensions.x)} dia × ${Math.round(exercise.dimensions.y)} h`
+      : exercise.kind === "sphere"
+        ? `${Math.round(exercise.dimensions.x)} dia`
       : exercise.kind === "loomis"
         ? `${Math.round(exercise.dimensions.x)} cranium dia`
       : `${Math.round(exercise.dimensions.x)} × ${Math.round(exercise.dimensions.y)} × ${Math.round(exercise.dimensions.z)}`;
@@ -3972,6 +4380,11 @@ function togglePerspectiveGuides() {
 
 function togglePerspectivePlaneArrows() {
   state.perspective.showPlaneArrows = !state.perspective.showPlaneArrows;
+  requestRender();
+}
+
+function setPerspectiveLightPreset(preset) {
+  state.perspective.lightPreset = lightPresets[preset] ? preset : "off";
   requestRender();
 }
 
@@ -4629,6 +5042,7 @@ function handlePerspectiveClick(event) {
   const shapeButton = event.target.closest("[data-shape]");
   const perspectiveButton = event.target.closest("[data-perspective-mode]");
   const toggleButton = event.target.closest("[data-toggle]");
+  const lightButton = event.target.closest("[data-light]");
   const rotateButton = event.target.closest("[data-rotate]");
   const liftButton = event.target.closest("[data-lift]");
   const durationButton = event.target.closest("[data-duration]");
@@ -4674,6 +5088,12 @@ function handlePerspectiveClick(event) {
       togglePerspectiveAutoShuffle();
     }
 
+    return;
+  }
+
+  if (lightButton) {
+    switchMode("perspective");
+    setPerspectiveLightPreset(lightButton.dataset.light);
     return;
   }
 
@@ -4915,6 +5335,16 @@ function handleKeyboard(event) {
     state.perspective.selectedShape = "cylinder";
     syncUi();
     setPerspectiveExercise("cylinder");
+  } else if (key === "k") {
+    state.mode = "perspective";
+    state.perspective.selectedShape = "cone";
+    syncUi();
+    setPerspectiveExercise("cone");
+  } else if (key === "o") {
+    state.mode = "perspective";
+    state.perspective.selectedShape = "sphere";
+    syncUi();
+    setPerspectiveExercise("sphere");
   } else if (key === "m") {
     state.mode = "perspective";
     state.perspective.selectedShape = "loomis";
