@@ -316,6 +316,7 @@ const state = {
     selectedShape: "random",
     selectedMode: "three",
     lightPreset: "off",
+    advancedLighting: true,
     current: null,
     animation: null,
     interaction: null,
@@ -699,6 +700,10 @@ function formatPerspectiveStatus() {
 
   if (state.perspective.lightPreset !== "off") {
     fragments.push(`${formatLightPreset(state.perspective.lightPreset).toLowerCase()} light`);
+
+    if (state.perspective.advancedLighting) {
+      fragments.push("advanced shading");
+    }
   }
 
   if (state.perspective.zoomedOut) {
@@ -2926,23 +2931,39 @@ function mixColorChannel(a, b, t) {
   return Math.round(lerp(a, b, t));
 }
 
-function buildShadeFill(intensity, alpha = 0.72) {
+function smoothstep(edge0, edge1, value) {
+  if (edge0 === edge1) {
+    return value < edge0 ? 0 : 1;
+  }
+
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function mixColor(a, b, t) {
+  const amount = clamp(t, 0, 1);
+  return {
+    r: mixColorChannel(a.r, b.r, amount),
+    g: mixColorChannel(a.g, b.g, amount),
+    b: mixColorChannel(a.b, b.b, amount),
+  };
+}
+
+function buildShadeColor(intensity) {
   const shadow = { r: 104, g: 86, b: 60 };
   const mid = { r: 182, g: 154, b: 116 };
   const light = { r: 247, g: 234, b: 202 };
   const t = clamp(intensity, 0, 1);
-  const base = t < 0.58
-    ? {
-        r: mixColorChannel(shadow.r, mid.r, t / 0.58),
-        g: mixColorChannel(shadow.g, mid.g, t / 0.58),
-        b: mixColorChannel(shadow.b, mid.b, t / 0.58),
-      }
-    : {
-        r: mixColorChannel(mid.r, light.r, (t - 0.58) / 0.42),
-        g: mixColorChannel(mid.g, light.g, (t - 0.58) / 0.42),
-        b: mixColorChannel(mid.b, light.b, (t - 0.58) / 0.42),
-      };
-  return `rgba(${base.r}, ${base.g}, ${base.b}, ${alpha})`;
+
+  return t < 0.58 ? mixColor(shadow, mid, t / 0.58) : mixColor(mid, light, (t - 0.58) / 0.42);
+}
+
+function toRgba(color, alpha = 1) {
+  return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+}
+
+function buildShadeFill(intensity, alpha = 0.72) {
+  return toRgba(buildShadeColor(intensity), alpha);
 }
 
 function getLitIntensity(normal, lightDirection, ambient = 0.2, diffuse = 0.8) {
@@ -2951,6 +2972,195 @@ function getLitIntensity(normal, lightDirection, ambient = 0.2, diffuse = 0.8) {
   }
 
   return clamp(ambient + Math.max(0, dot(normalize(normal), lightDirection)) * diffuse, 0, 1);
+}
+
+function getScreenLightVector(lightDirection) {
+  if (!lightDirection) {
+    return { x: 0.76, y: -0.64 };
+  }
+
+  const screen = {
+    x: lightDirection.x + lightDirection.z * 0.18,
+    y: -lightDirection.y + lightDirection.z * 0.08,
+  };
+  const magnitudeValue = Math.hypot(screen.x, screen.y);
+
+  if (magnitudeValue < 0.00001) {
+    return { x: 0.76, y: -0.64 };
+  }
+
+  return { x: screen.x / magnitudeValue, y: screen.y / magnitudeValue };
+}
+
+function getViewDirection(point) {
+  return normalize(scale(point, -1));
+}
+
+function computeAdvancedLighting(normal, lightDirection, viewDirection, options = {}) {
+  const light = normalize(lightDirection);
+  const view = normalize(viewDirection);
+  const surfaceNormal = normalize(normal);
+  const curved = Boolean(options.curved);
+  const fillLight = normalize({
+    x: -light.x * 0.72,
+    y: -light.y * 0.18 + 0.24,
+    z: -light.z * 0.72,
+  });
+  const halfVector = normalize(add(light, view));
+  const ndotl = dot(surfaceNormal, light);
+  const ndotv = clamp(dot(surfaceNormal, view), -1, 1);
+  const key = Math.max(0, ndotl);
+  const fill = Math.max(0, dot(surfaceNormal, fillLight));
+  const reflected = (1 - key) * smoothstep(-0.7, 0.12, ndotl) * (curved ? 0.42 : 0.24);
+  const coreShadow = smoothstep(-0.28, 0.18, -ndotl) * (1 - fill * 0.58);
+  const specularSize = curved ? 26 : 14;
+  const specularStrength = curved ? 0.92 : 0.34;
+  const specular = Math.pow(Math.max(0, dot(surfaceNormal, halfVector)), specularSize) * specularStrength;
+  const rimBase = Math.pow(1 - Math.max(0, ndotv), curved ? 2.25 : 3.1);
+  const rimLight = Math.max(0, dot(scale(light, -1), view));
+  const rim = rimBase * rimLight * (curved ? 0.36 : 0.12);
+  const ambient = curved ? 0.11 : 0.16;
+  const intensity = clamp(
+    ambient + key * (curved ? 0.74 : 0.7) + fill * 0.17 + reflected * 0.18 + rim * 0.12 - coreShadow * 0.18,
+    0,
+    1,
+  );
+
+  return {
+    intensity,
+    coreShadow,
+    reflected,
+    specular,
+    rim,
+  };
+}
+
+function buildAdvancedShadeFill(shading, alpha = 0.74) {
+  let color = buildShadeColor(shading.intensity);
+  color = mixColor(color, { r: 207, g: 167, b: 122 }, clamp(shading.reflected * 0.34, 0, 0.36));
+  color = mixColor(color, { r: 52, g: 37, b: 26 }, clamp(shading.coreShadow * 0.8, 0, 0.82));
+  color = mixColor(color, { r: 255, g: 248, b: 232 }, clamp(shading.specular * 0.86 + shading.rim * 0.42, 0, 0.96));
+  return toRgba(color, alpha);
+}
+
+function getPolygonBounds(points) {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    width: maxX - minX,
+    height: maxY - minY,
+    center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+  };
+}
+
+function clipToPolygon(points, drawFn) {
+  if (points.length < 3) {
+    return;
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    ctx.lineTo(points[index].x, points[index].y);
+  }
+
+  ctx.closePath();
+  ctx.clip();
+  drawFn();
+  ctx.restore();
+}
+
+function fillAdvancedFaceLighting(points, shading, lightDirection, alpha = 0.82) {
+  const bounds = getPolygonBounds(points);
+  const lightVector = getScreenLightVector(lightDirection);
+  const extent = Math.max(bounds.width, bounds.height, 28) * 0.82;
+  const shadowPoint = {
+    x: bounds.center.x - lightVector.x * extent,
+    y: bounds.center.y - lightVector.y * extent,
+  };
+  const lightPoint = {
+    x: bounds.center.x + lightVector.x * extent,
+    y: bounds.center.y + lightVector.y * extent,
+  };
+  const shadowColor = buildAdvancedShadeFill(
+    {
+      ...shading,
+      intensity: clamp(shading.intensity * 0.42, 0, 1),
+      specular: 0,
+      rim: 0,
+      coreShadow: clamp(shading.coreShadow + 0.18, 0, 1),
+    },
+    alpha,
+  );
+  const midColor = buildAdvancedShadeFill(
+    {
+      ...shading,
+      specular: shading.specular * 0.2,
+      rim: shading.rim * 0.25,
+    },
+    alpha,
+  );
+  const lightColor = buildAdvancedShadeFill(
+    {
+      ...shading,
+      intensity: clamp(shading.intensity + 0.2, 0, 1),
+      reflected: shading.reflected * 0.6,
+      specular: clamp(shading.specular + 0.16, 0, 1),
+      coreShadow: shading.coreShadow * 0.5,
+    },
+    alpha,
+  );
+  const highlightColor = buildAdvancedShadeFill(
+    {
+      ...shading,
+      intensity: clamp(shading.intensity + 0.34, 0, 1),
+      reflected: shading.reflected * 0.48,
+      specular: clamp(shading.specular + 0.38, 0, 1),
+      rim: clamp(shading.rim + 0.08, 0, 1),
+      coreShadow: shading.coreShadow * 0.24,
+    },
+    alpha,
+  );
+
+  clipToPolygon(points, () => {
+    const gradient = ctx.createLinearGradient(shadowPoint.x, shadowPoint.y, lightPoint.x, lightPoint.y);
+    gradient.addColorStop(0, shadowColor);
+    gradient.addColorStop(0.32, midColor);
+    gradient.addColorStop(0.76, lightColor);
+    gradient.addColorStop(1, highlightColor);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(bounds.minX - 2, bounds.minY - 2, bounds.width + 4, bounds.height + 4);
+
+    if (shading.reflected > 0.04 || shading.specular > 0.04) {
+      const bounceGradient = ctx.createLinearGradient(
+        lightPoint.x,
+        lightPoint.y,
+        bounds.center.x - lightVector.x * extent * 0.52,
+        bounds.center.y - lightVector.y * extent * 0.52,
+      );
+      bounceGradient.addColorStop(0, "rgba(255, 248, 230, 0)");
+      bounceGradient.addColorStop(
+        0.58,
+        toRgba({ r: 216, g: 188, b: 149 }, clamp(shading.reflected * 0.18 + shading.specular * 0.12, 0, 0.18)),
+      );
+      bounceGradient.addColorStop(
+        1,
+        toRgba({ r: 87, g: 56, b: 38 }, clamp(shading.coreShadow * 0.08, 0, 0.12)),
+      );
+      ctx.fillStyle = bounceGradient;
+      ctx.fillRect(bounds.minX - 2, bounds.minY - 2, bounds.width + 4, bounds.height + 4);
+    }
+  });
 }
 
 function fillPolygon(points, fillStyle, alpha = 1) {
@@ -2988,6 +3198,8 @@ function fillBoxLighting(worldVertices, projectedVertices, faceVisibility) {
       const center = averagePoints(points);
       const intensity = getLitIntensity(normal, lightDirection, 0.16, 0.84);
       return {
+        worldCenter: center,
+        normal,
         points: face.indices.map((index) => projectedVertices[index]),
         depth: center.z,
         intensity,
@@ -2996,7 +3208,12 @@ function fillBoxLighting(worldVertices, projectedVertices, faceVisibility) {
     .sort((left, right) => right.depth - left.depth);
 
   for (const face of visibleFaces) {
-    fillPolygon(face.points, buildShadeFill(face.intensity, 0.76));
+    if (state.perspective.advancedLighting) {
+      const shading = computeAdvancedLighting(face.normal, lightDirection, getViewDirection(face.worldCenter));
+      fillAdvancedFaceLighting(face.points, shading, lightDirection, 0.84);
+    } else {
+      fillPolygon(face.points, buildShadeFill(face.intensity, 0.76));
+    }
   }
 }
 
@@ -3037,6 +3254,8 @@ function fillCylinderLighting(exercise, projection, axis, basisX, basisZ, topCen
         projectPoint(bottomB.point, projection.focalLength, projection.origin),
         projectPoint(bottomA.point, projection.focalLength, projection.origin),
       ],
+      center: bandCenter,
+      normal: radialMidpoint,
       depth: bandCenter.z,
       intensity: getLitIntensity(radialMidpoint, lightDirection, 0.18, 0.78),
     });
@@ -3045,7 +3264,12 @@ function fillCylinderLighting(exercise, projection, axis, basisX, basisZ, topCen
   surfaceBands.sort((left, right) => right.depth - left.depth);
 
   for (const band of surfaceBands) {
-    fillPolygon(band.points, buildShadeFill(band.intensity, 0.58));
+    if (state.perspective.advancedLighting) {
+      const shading = computeAdvancedLighting(band.normal, lightDirection, getViewDirection(band.center), { curved: true });
+      fillPolygon(band.points, buildAdvancedShadeFill(shading, 0.62));
+    } else {
+      fillPolygon(band.points, buildShadeFill(band.intensity, 0.58));
+    }
   }
 
   const topNormal = axis;
@@ -3058,14 +3282,24 @@ function fillCylinderLighting(exercise, projection, axis, basisX, basisZ, topCen
   if (topVisibility > 0) {
     fillPolygon(
       buildCylinderCapPolygon(topCenter, basisX, basisZ, radius, projection),
-      buildShadeFill(topCapIntensity, 0.72),
+      state.perspective.advancedLighting
+        ? buildAdvancedShadeFill(
+            computeAdvancedLighting(topNormal, lightDirection, getViewDirection(topCenter)),
+            0.76,
+          )
+        : buildShadeFill(topCapIntensity, 0.72),
     );
   }
 
   if (bottomVisibility > 0) {
     fillPolygon(
       buildCylinderCapPolygon(bottomCenter, basisX, basisZ, radius, projection),
-      buildShadeFill(bottomCapIntensity, 0.72),
+      state.perspective.advancedLighting
+        ? buildAdvancedShadeFill(
+            computeAdvancedLighting(bottomNormal, lightDirection, getViewDirection(bottomCenter)),
+            0.76,
+          )
+        : buildShadeFill(bottomCapIntensity, 0.72),
     );
   }
 }
@@ -3091,6 +3325,8 @@ function fillConeLighting(exercise, projection, apex, baseWorld, axis) {
         projectPoint(a.point, projection.focalLength, projection.origin),
         projectPoint(b.point, projection.focalLength, projection.origin),
       ],
+      center,
+      normal,
       depth: center.z,
       intensity: getLitIntensity(normal, lightDirection, 0.16, 0.82),
     });
@@ -3099,7 +3335,12 @@ function fillConeLighting(exercise, projection, apex, baseWorld, axis) {
   sideFaces.sort((left, right) => right.depth - left.depth);
 
   for (const face of sideFaces) {
-    fillPolygon(face.points, buildShadeFill(face.intensity, 0.64));
+    if (state.perspective.advancedLighting) {
+      const shading = computeAdvancedLighting(face.normal, lightDirection, getViewDirection(face.center), { curved: true });
+      fillPolygon(face.points, buildAdvancedShadeFill(shading, 0.68));
+    } else {
+      fillPolygon(face.points, buildShadeFill(face.intensity, 0.64));
+    }
   }
 
   const baseNormal = scale(axis, -1);
@@ -3107,7 +3348,16 @@ function fillConeLighting(exercise, projection, apex, baseWorld, axis) {
   if (dot(baseNormal, scale(averagePoints(baseWorld.map((entry) => entry.point)), -1)) > 0) {
     fillPolygon(
       baseWorld.map((entry) => projectPoint(entry.point, projection.focalLength, projection.origin)),
-      buildShadeFill(getLitIntensity(baseNormal, lightDirection, 0.14, 0.72), 0.72),
+      state.perspective.advancedLighting
+        ? buildAdvancedShadeFill(
+            computeAdvancedLighting(
+              baseNormal,
+              lightDirection,
+              getViewDirection(averagePoints(baseWorld.map((entry) => entry.point))),
+            ),
+            0.76,
+          )
+        : buildShadeFill(getLitIntensity(baseNormal, lightDirection, 0.14, 0.72), 0.72),
     );
   }
 }
@@ -3125,24 +3375,94 @@ function fillSphereLighting(center, radius, projection) {
     x: lightDirection.x * screenRadius * 0.34,
     y: -lightDirection.y * screenRadius * 0.34,
   };
-  const gradient = ctx.createRadialGradient(
-    screenCenter.x + highlightOffset.x,
-    screenCenter.y + highlightOffset.y,
-    screenRadius * 0.12,
-    screenCenter.x + screenRadius * 0.1,
-    screenCenter.y + screenRadius * 0.18,
-    screenRadius * 1.04,
-  );
-  gradient.addColorStop(0, "rgba(255, 248, 228, 0.9)");
-  gradient.addColorStop(0.28, "rgba(228, 206, 165, 0.78)");
-  gradient.addColorStop(0.72, "rgba(157, 124, 82, 0.72)");
-  gradient.addColorStop(1, "rgba(90, 68, 46, 0.76)");
 
   ctx.save();
-  ctx.fillStyle = gradient;
   ctx.beginPath();
   ctx.arc(screenCenter.x, screenCenter.y, screenRadius, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.clip();
+
+  if (state.perspective.advancedLighting) {
+    const gradient = ctx.createRadialGradient(
+      screenCenter.x + highlightOffset.x,
+      screenCenter.y + highlightOffset.y,
+      screenRadius * 0.06,
+      screenCenter.x + screenRadius * 0.08,
+      screenCenter.y + screenRadius * 0.16,
+      screenRadius * 1.12,
+    );
+    gradient.addColorStop(0, "rgba(255, 252, 241, 0.98)");
+    gradient.addColorStop(0.1, "rgba(252, 242, 214, 0.95)");
+    gradient.addColorStop(0.3, "rgba(232, 207, 163, 0.84)");
+    gradient.addColorStop(0.56, "rgba(180, 143, 97, 0.76)");
+    gradient.addColorStop(0.78, "rgba(112, 80, 49, 0.82)");
+    gradient.addColorStop(1, "rgba(63, 42, 27, 0.86)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(
+      screenCenter.x - screenRadius - 2,
+      screenCenter.y - screenRadius - 2,
+      screenRadius * 2 + 4,
+      screenRadius * 2 + 4,
+    );
+
+    const reflectedGradient = ctx.createRadialGradient(
+      screenCenter.x - highlightOffset.x * 0.68,
+      screenCenter.y - highlightOffset.y * 0.22 + screenRadius * 0.18,
+      screenRadius * 0.08,
+      screenCenter.x - highlightOffset.x * 0.58,
+      screenCenter.y - highlightOffset.y * 0.12 + screenRadius * 0.26,
+      screenRadius * 0.92,
+    );
+    reflectedGradient.addColorStop(0, "rgba(255, 242, 214, 0.28)");
+    reflectedGradient.addColorStop(0.44, "rgba(228, 193, 144, 0.12)");
+    reflectedGradient.addColorStop(1, "rgba(228, 193, 144, 0)");
+    ctx.fillStyle = reflectedGradient;
+    ctx.fillRect(
+      screenCenter.x - screenRadius - 2,
+      screenCenter.y - screenRadius - 2,
+      screenRadius * 2 + 4,
+      screenRadius * 2 + 4,
+    );
+
+    const highlight = ctx.createRadialGradient(
+      screenCenter.x + highlightOffset.x * 1.06,
+      screenCenter.y + highlightOffset.y * 1.06,
+      0,
+      screenCenter.x + highlightOffset.x * 1.06,
+      screenCenter.y + highlightOffset.y * 1.06,
+      screenRadius * 0.26,
+    );
+    highlight.addColorStop(0, "rgba(255, 255, 250, 0.64)");
+    highlight.addColorStop(0.36, "rgba(255, 250, 236, 0.22)");
+    highlight.addColorStop(1, "rgba(255, 250, 236, 0)");
+    ctx.fillStyle = highlight;
+    ctx.fillRect(
+      screenCenter.x - screenRadius - 2,
+      screenCenter.y - screenRadius - 2,
+      screenRadius * 2 + 4,
+      screenRadius * 2 + 4,
+    );
+  } else {
+    const gradient = ctx.createRadialGradient(
+      screenCenter.x + highlightOffset.x,
+      screenCenter.y + highlightOffset.y,
+      screenRadius * 0.12,
+      screenCenter.x + screenRadius * 0.1,
+      screenCenter.y + screenRadius * 0.18,
+      screenRadius * 1.04,
+    );
+    gradient.addColorStop(0, "rgba(255, 248, 228, 0.9)");
+    gradient.addColorStop(0.28, "rgba(228, 206, 165, 0.78)");
+    gradient.addColorStop(0.72, "rgba(157, 124, 82, 0.72)");
+    gradient.addColorStop(1, "rgba(90, 68, 46, 0.76)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(
+      screenCenter.x - screenRadius - 2,
+      screenCenter.y - screenRadius - 2,
+      screenRadius * 2 + 4,
+      screenRadius * 2 + 4,
+    );
+  }
+
   ctx.restore();
 }
 
@@ -3836,8 +4156,10 @@ function syncPerspectiveControls() {
         ? state.perspective.showHidden
         : toggle === "guides"
           ? state.perspective.showGuides
-          : toggle === "plane-arrows"
-            ? state.perspective.showPlaneArrows
+        : toggle === "plane-arrows"
+          ? state.perspective.showPlaneArrows
+          : toggle === "advanced-lighting"
+            ? state.perspective.advancedLighting
           : toggle === "cylinder-guides"
             ? state.perspective.showCylinderGuides
           : toggle === "zoom"
@@ -3850,6 +4172,7 @@ function syncPerspectiveControls() {
   const hiddenButton = document.querySelector('[data-toggle="hidden"]');
   const guidesButton = document.querySelector('[data-toggle="guides"]');
   const planeArrowsButton = document.querySelector('[data-toggle="plane-arrows"]');
+  const advancedLightingButton = document.querySelector('[data-toggle="advanced-lighting"]');
   const cylinderGuidesButton = document.querySelector('[data-toggle="cylinder-guides"]');
   const zoomButton = document.querySelector('[data-toggle="zoom"]');
   const autoButton = document.querySelector('[data-toggle="auto"]');
@@ -3858,6 +4181,11 @@ function syncPerspectiveControls() {
   guidesButton.textContent = state.perspective.showGuides ? "Guides On" : "Guides Off";
   if (planeArrowsButton) {
     planeArrowsButton.textContent = state.perspective.showPlaneArrows ? "Plane Arrows On" : "Plane Arrows";
+  }
+  if (advancedLightingButton) {
+    advancedLightingButton.textContent = state.perspective.advancedLighting
+      ? "Advanced Lighting On"
+      : "Advanced Lighting";
   }
   if (cylinderGuidesButton) {
     cylinderGuidesButton.textContent = state.perspective.showCylinderGuides
@@ -4380,6 +4708,11 @@ function togglePerspectiveGuides() {
 
 function togglePerspectivePlaneArrows() {
   state.perspective.showPlaneArrows = !state.perspective.showPlaneArrows;
+  requestRender();
+}
+
+function togglePerspectiveAdvancedLighting() {
+  state.perspective.advancedLighting = !state.perspective.advancedLighting;
   requestRender();
 }
 
@@ -5080,6 +5413,8 @@ function handlePerspectiveClick(event) {
       togglePerspectiveGuides();
     } else if (toggle === "plane-arrows") {
       togglePerspectivePlaneArrows();
+    } else if (toggle === "advanced-lighting") {
+      togglePerspectiveAdvancedLighting();
     } else if (toggle === "cylinder-guides") {
       togglePerspectiveCylinderGuides();
     } else if (toggle === "zoom") {
