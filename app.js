@@ -3036,10 +3036,16 @@ function computeAdvancedLighting(normal, lightDirection, viewDirection, options 
 }
 
 function buildAdvancedShadeFill(shading, alpha = 0.74) {
-  let color = buildShadeColor(shading.intensity);
-  color = mixColor(color, { r: 207, g: 167, b: 122 }, clamp(shading.reflected * 0.34, 0, 0.36));
-  color = mixColor(color, { r: 52, g: 37, b: 26 }, clamp(shading.coreShadow * 0.8, 0, 0.82));
-  color = mixColor(color, { r: 255, g: 248, b: 232 }, clamp(shading.specular * 0.86 + shading.rim * 0.42, 0, 0.96));
+  const shadow = { r: 36, g: 36, b: 40 };
+  const mid = { r: 148, g: 148, b: 152 };
+  const light = { r: 242, g: 242, b: 245 };
+  const reflectedTint = { r: 188, g: 193, b: 204 };
+  let color = shading.intensity < 0.58
+    ? mixColor(shadow, mid, shading.intensity / 0.58)
+    : mixColor(mid, light, (shading.intensity - 0.58) / 0.42);
+  color = mixColor(color, reflectedTint, clamp(shading.reflected * 0.22 + shading.rim * 0.08, 0, 0.22));
+  color = mixColor(color, { r: 18, g: 18, b: 22 }, clamp(shading.coreShadow * 0.84, 0, 0.88));
+  color = mixColor(color, { r: 255, g: 255, b: 255 }, clamp(shading.specular * 0.92 + shading.rim * 0.28, 0, 0.98));
   return toRgba(color, alpha);
 }
 
@@ -3151,16 +3157,209 @@ function fillAdvancedFaceLighting(points, shading, lightDirection, alpha = 0.82)
       bounceGradient.addColorStop(0, "rgba(255, 248, 230, 0)");
       bounceGradient.addColorStop(
         0.58,
-        toRgba({ r: 216, g: 188, b: 149 }, clamp(shading.reflected * 0.18 + shading.specular * 0.12, 0, 0.18)),
+        toRgba({ r: 212, g: 216, b: 225 }, clamp(shading.reflected * 0.18 + shading.specular * 0.12, 0, 0.18)),
       );
       bounceGradient.addColorStop(
         1,
-        toRgba({ r: 87, g: 56, b: 38 }, clamp(shading.coreShadow * 0.08, 0, 0.12)),
+        toRgba({ r: 48, g: 49, b: 56 }, clamp(shading.coreShadow * 0.08, 0, 0.12)),
       );
       ctx.fillStyle = bounceGradient;
       ctx.fillRect(bounds.minX - 2, bounds.minY - 2, bounds.width + 4, bounds.height + 4);
     }
   });
+}
+
+function cross2d(origin, a, b) {
+  return (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+}
+
+function buildConvexHull(points) {
+  const unique = [];
+
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      continue;
+    }
+
+    if (unique.some((entry) => Math.abs(entry.x - point.x) < 0.5 && Math.abs(entry.y - point.y) < 0.5)) {
+      continue;
+    }
+
+    unique.push(point);
+  }
+
+  if (unique.length < 3) {
+    return unique;
+  }
+
+  unique.sort((left, right) => (left.x === right.x ? left.y - right.y : left.x - right.x));
+  const lower = [];
+
+  for (const point of unique) {
+    while (lower.length >= 2 && cross2d(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+      lower.pop();
+    }
+
+    lower.push(point);
+  }
+
+  const upper = [];
+
+  for (let index = unique.length - 1; index >= 0; index -= 1) {
+    const point = unique[index];
+
+    while (upper.length >= 2 && cross2d(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+      upper.pop();
+    }
+
+    upper.push(point);
+  }
+
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function buildWorldRing(center, radius, basisA, basisB, segmentCount = 48) {
+  const points = [];
+
+  for (let index = 0; index < segmentCount; index += 1) {
+    const angle = (index / segmentCount) * Math.PI * 2;
+    const radial = add(scale(basisA, Math.cos(angle)), scale(basisB, Math.sin(angle)));
+    points.push(add(center, scale(radial, radius)));
+  }
+
+  return points;
+}
+
+function buildSphereShadowSamples(center, radius, rotation) {
+  const axisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, rotation));
+  const axisY = normalize(rotatePoint({ x: 0, y: 1, z: 0 }, rotation));
+  const axisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, rotation));
+  const points = [];
+
+  for (let latIndex = 0; latIndex <= 6; latIndex += 1) {
+    const phi = (latIndex / 6) * Math.PI;
+    const sinPhi = Math.sin(phi);
+    const cosPhi = Math.cos(phi);
+
+    for (let lonIndex = 0; lonIndex < 18; lonIndex += 1) {
+      const theta = (lonIndex / 18) * Math.PI * 2;
+      const direction = add(
+        add(scale(axisX, Math.cos(theta) * sinPhi), scale(axisY, cosPhi)),
+        scale(axisZ, Math.sin(theta) * sinPhi),
+      );
+      points.push(add(center, scale(direction, radius)));
+    }
+  }
+
+  return points;
+}
+
+function getExerciseWorldPoints(exercise) {
+  if (exercise.kind === "cylinder") {
+    const radius = exercise.dimensions.x / 2;
+    const heightValue = exercise.dimensions.y;
+    const basisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation));
+    const basisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation));
+    const topCenter = add(rotatePoint({ x: 0, y: heightValue / 2, z: 0 }, exercise.rotation), exercise.center);
+    const bottomCenter = add(rotatePoint({ x: 0, y: -heightValue / 2, z: 0 }, exercise.rotation), exercise.center);
+    return [
+      ...buildWorldRing(topCenter, radius, basisX, basisZ, 48),
+      ...buildWorldRing(bottomCenter, radius, basisX, basisZ, 48),
+    ];
+  }
+
+  if (exercise.kind === "cone") {
+    const radius = exercise.dimensions.x / 2;
+    const heightValue = exercise.dimensions.y;
+    const basisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation));
+    const basisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation));
+    const apex = add(rotatePoint({ x: 0, y: heightValue / 2, z: 0 }, exercise.rotation), exercise.center);
+    const baseCenter = add(rotatePoint({ x: 0, y: -heightValue / 2, z: 0 }, exercise.rotation), exercise.center);
+    return [apex, ...buildWorldRing(baseCenter, radius, basisX, basisZ, 56)];
+  }
+
+  if (exercise.kind === "sphere" || exercise.kind === "loomis") {
+    const radius = exercise.dimensions.x / 2;
+    const center =
+      exercise.kind === "loomis"
+        ? add(rotatePoint({ x: 0, y: radius * 0.08, z: 0 }, exercise.rotation), exercise.center)
+        : exercise.center;
+    const points = buildSphereShadowSamples(center, radius, exercise.rotation);
+
+    if (exercise.kind === "loomis") {
+      const axisX = normalize(rotatePoint({ x: 1, y: 0, z: 0 }, exercise.rotation));
+      const axisY = normalize(rotatePoint({ x: 0, y: 1, z: 0 }, exercise.rotation));
+      const axisZ = normalize(rotatePoint({ x: 0, y: 0, z: 1 }, exercise.rotation));
+      points.push(
+        add(center, add(scale(axisX, -radius * 0.47), add(scale(axisY, -radius * 0.68), scale(axisZ, radius * 0.18)))),
+        add(center, add(scale(axisX, radius * 0.47), add(scale(axisY, -radius * 0.68), scale(axisZ, radius * 0.18)))),
+        add(center, add(scale(axisY, -radius * 1.14), scale(axisZ, radius * 0.2))),
+      );
+    }
+
+    return points;
+  }
+
+  return createBoxVertices(exercise.dimensions).map((vertex) =>
+    add(rotatePoint(vertex, exercise.rotation), exercise.center),
+  );
+}
+
+function projectShadowPoint(point, lightDirection, groundY) {
+  const ray = scale(lightDirection, -1);
+
+  if (Math.abs(ray.y) < 0.00001) {
+    return null;
+  }
+
+  const t = (groundY - point.y) / ray.y;
+
+  if (t < 0) {
+    return null;
+  }
+
+  return add(point, scale(ray, t));
+}
+
+function drawCastShadow(exercise, projection) {
+  if (!state.perspective.advancedLighting) {
+    return;
+  }
+
+  const lightDirection = getPerspectiveLightDirection();
+
+  if (!lightDirection || lightDirection.y <= 0.04) {
+    return;
+  }
+
+  const worldPoints = getExerciseWorldPoints(exercise);
+
+  if (worldPoints.length < 3) {
+    return;
+  }
+
+  const groundY = Math.min(...worldPoints.map((point) => point.y));
+  const projected = worldPoints
+    .map((point) => projectShadowPoint(point, lightDirection, groundY))
+    .filter(Boolean)
+    .map((point) => projectPoint(point, projection.focalLength, projection.origin));
+  const hull = buildConvexHull(projected);
+
+  if (hull.length < 3) {
+    return;
+  }
+
+  const shadowAlpha = clamp(0.22 + lightDirection.y * 0.22, 0.22, 0.44);
+  const blur = clamp(Math.min(state.view.width, state.view.height) * 0.008, 8, 18);
+
+  ctx.save();
+  ctx.filter = `blur(${blur}px)`;
+  fillPolygon(hull, `rgba(20, 20, 24, ${shadowAlpha * 0.64})`);
+  ctx.restore();
+
+  fillPolygon(hull, `rgba(34, 34, 38, ${shadowAlpha})`);
 }
 
 function fillPolygon(points, fillStyle, alpha = 1) {
@@ -4095,6 +4294,7 @@ function drawExercise(exercise, alpha = 1) {
 
   ctx.save();
   ctx.globalAlpha = clamp(alpha, 0, 1);
+  drawCastShadow(exercise, projection);
 
   if (exercise.kind === "cylinder") {
     drawCylinder(exercise, projection);
