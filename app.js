@@ -644,6 +644,10 @@ function formatKind(kind) {
     return "Cube";
   }
 
+  if (kind === "cube-ref") {
+    return "Cube Ref";
+  }
+
   if (kind === "cylinder") {
     return "Cylinder";
   }
@@ -865,6 +869,10 @@ function getRenderFamily(kind) {
     return "cone";
   }
 
+  if (kind === "cube-ref") {
+    return "box";
+  }
+
   return kind === "cylinder" ? "cylinder" : "box";
 }
 
@@ -925,6 +933,9 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
 
   if (kind === "cube") {
     dimensions = { x: base, y: base, z: base };
+  } else if (kind === "cube-ref") {
+    const size = base * 0.62;
+    dimensions = { x: size, y: size, z: size };
   } else if (kind === "loomis") {
     dimensions = {
       x: base * 0.92,
@@ -960,7 +971,13 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
   }
 
   const center =
-    perspectiveMode === "one"
+    kind === "cube-ref"
+      ? {
+          x: randomBetween(-18, 18),
+          y: randomBetween(-12, 12),
+          z: randomBetween(980, 1260),
+        }
+      : perspectiveMode === "one"
       ? {
           x: randomBetween(-70, 70),
           y: randomBetween(-45, 45),
@@ -981,7 +998,13 @@ function buildExerciseCandidate(shapeMode, perspectiveMode) {
 }
 
 function isReadableExercise(exercise, perspectiveMode) {
-  if (exercise.kind === "cylinder" || exercise.kind === "cone" || exercise.kind === "sphere" || exercise.kind === "loomis") {
+  if (
+    exercise.kind === "cylinder" ||
+    exercise.kind === "cone" ||
+    exercise.kind === "sphere" ||
+    exercise.kind === "loomis" ||
+    exercise.kind === "cube-ref"
+  ) {
     return true;
   }
 
@@ -3256,7 +3279,45 @@ function buildSphereShadowSamples(center, radius, rotation) {
   return points;
 }
 
+function buildCubeRefSubExercises(exercise) {
+  const spacing = exercise.dimensions.x * 1.42;
+  const tiltX = 0.34;
+  const tiltY = 0.38;
+  const subs = [];
+
+  for (let row = -1; row <= 1; row += 1) {
+    for (let column = -1; column <= 1; column += 1) {
+      const localOffset = {
+        x: column * spacing,
+        y: -row * spacing,
+        z: 0,
+      };
+      const offset = rotatePoint(localOffset, exercise.rotation);
+      subs.push({
+        kind: "cube",
+        dimensions: { ...exercise.dimensions },
+        center: add(exercise.center, offset),
+        rotation: {
+          x: wrapAngle(exercise.rotation.x + row * tiltX),
+          y: wrapAngle(exercise.rotation.y + column * tiltY),
+          z: exercise.rotation.z,
+        },
+      });
+    }
+  }
+
+  return subs;
+}
+
 function getExerciseWorldPoints(exercise) {
+  if (exercise.kind === "cube-ref") {
+    return buildCubeRefSubExercises(exercise).flatMap((subExercise) =>
+      createBoxVertices(subExercise.dimensions).map((vertex) =>
+        add(rotatePoint(vertex, subExercise.rotation), subExercise.center),
+      ),
+    );
+  }
+
   if (exercise.kind === "cylinder") {
     const radius = exercise.dimensions.x / 2;
     const heightValue = exercise.dimensions.y;
@@ -3849,12 +3910,52 @@ function drawPlaneArrowOverlay(exercise, projection, alpha = 1) {
   ctx.restore();
 }
 
-function drawBox(exercise, projection) {
+function getBoxProjectionData(exercise, projection) {
   const { focalLength, origin } = projection;
   const baseVertices = createBoxVertices(exercise.dimensions);
   const worldVertices = baseVertices.map((vertex) => add(rotatePoint(vertex, exercise.rotation), exercise.center));
   const projectedVertices = worldVertices.map((vertex) => projectPoint(vertex, focalLength, origin));
   const faceVisibility = classifyFaces(worldVertices);
+  return { worldVertices, projectedVertices, faceVisibility };
+}
+
+function drawBoxReferenceDot(exercise, projection, options = {}) {
+  const { worldVertices, projectedVertices, faceVisibility } = getBoxProjectionData(exercise, projection);
+  let bestFace = null;
+
+  for (const face of faceDefinitions) {
+    if (!faceVisibility.get(face.name)) {
+      continue;
+    }
+
+    const points = face.indices.map((index) => worldVertices[index]);
+    const normal = cross(subtract(points[1], points[0]), subtract(points[2], points[0]));
+    const center = averagePoints(points);
+    const facing = dot(normalize(normal), normalize(scale(center, -1)));
+
+    if (!bestFace || facing > bestFace.facing) {
+      bestFace = {
+        facing,
+        center: averagePoints(face.indices.map((index) => projectedVertices[index])),
+      };
+    }
+  }
+
+  if (!bestFace) {
+    return;
+  }
+
+  const radius = options.radius || clamp(Math.min(state.view.width, state.view.height) * 0.0042, 4.5, 7.5);
+  ctx.save();
+  ctx.fillStyle = "rgba(27, 20, 17, 0.92)";
+  ctx.beginPath();
+  ctx.arc(bestFace.center.x, bestFace.center.y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBox(exercise, projection) {
+  const { worldVertices, projectedVertices, faceVisibility } = getBoxProjectionData(exercise, projection);
   const hiddenEdges = [];
   const visibleEdges = [];
 
@@ -3899,6 +4000,17 @@ function drawBox(exercise, projection) {
       centerRadius: Math.max(2.9, visibleWidth * 0.78),
       hiddenDash: [7, 7],
       connectorDash: [6, 7],
+    });
+  }
+}
+
+function drawCubeRef(exercise, projection) {
+  const subExercises = buildCubeRefSubExercises(exercise);
+
+  for (const subExercise of subExercises) {
+    drawBox(subExercise, projection);
+    drawBoxReferenceDot(subExercise, projection, {
+      radius: clamp(Math.min(state.view.width, state.view.height) * 0.0038, 3.8, 6.4),
     });
   }
 }
@@ -4296,7 +4408,9 @@ function drawExercise(exercise, alpha = 1) {
   ctx.globalAlpha = clamp(alpha, 0, 1);
   drawCastShadow(exercise, projection);
 
-  if (exercise.kind === "cylinder") {
+  if (exercise.kind === "cube-ref") {
+    drawCubeRef(exercise, projection);
+  } else if (exercise.kind === "cylinder") {
     drawCylinder(exercise, projection);
   } else if (exercise.kind === "cone") {
     drawCone(exercise, projection);
@@ -5860,6 +5974,11 @@ function handleKeyboard(event) {
     state.perspective.selectedShape = "cube";
     syncUi();
     setPerspectiveExercise("cube");
+  } else if (key === "x") {
+    state.mode = "perspective";
+    state.perspective.selectedShape = "cube-ref";
+    syncUi();
+    setPerspectiveExercise("cube-ref");
   } else if (key === "b") {
     state.mode = "perspective";
     state.perspective.selectedShape = "box";
